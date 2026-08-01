@@ -16,7 +16,10 @@ export type SketchConstraint =
   | { kind: "horizontal"; seg: number }
   | { kind: "vertical"; seg: number }
   | { kind: "length"; seg: number; value: number }
-  | { kind: "fix"; seg: number; at: [number, number] };
+  | { kind: "fix"; seg: number; at: [number, number] }
+  | { kind: "parallel"; seg: number; other: number }
+  | { kind: "perpendicular"; seg: number; other: number }
+  | { kind: "equal"; seg: number; other: number };
 
 export interface SolveResult {
   points: [number, number][];
@@ -49,6 +52,24 @@ function residuals(x: number[], n: number, constraints: SketchConstraint[]): num
       case "fix":
         r.push(px(i) - c.at[0], py(i) - c.at[1]);
         break;
+      case "parallel":
+      case "perpendicular":
+      case "equal": {
+        const ax = px(i + 1) - px(i);
+        const ay = py(i + 1) - py(i);
+        const bx = px(c.other + 1) - px(c.other);
+        const by = py(c.other + 1) - py(c.other);
+        const la = Math.hypot(ax, ay) || 1;
+        const lb = Math.hypot(bx, by) || 1;
+        if (c.kind === "parallel") {
+          r.push((ax * by - ay * bx) / (la * lb)); // sen do ângulo entre elas
+        } else if (c.kind === "perpendicular") {
+          r.push((ax * bx + ay * by) / (la * lb)); // cos do ângulo entre elas
+        } else {
+          r.push(la - lb);
+        }
+        break;
+      }
     }
   }
   return r;

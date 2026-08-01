@@ -35,8 +35,17 @@ interface UICallbacks {
   onEditSketch: (featureId: number) => void;
   /** liga/desliga o modo de seleção de aresta; retorna o estado */
   onToggleSelect: () => boolean;
-  onConstraint: (kind: "horizontal" | "vertical" | "length" | "fix") => void;
+  onConstraint: (kind: ConstraintKind) => void;
 }
+
+export type ConstraintKind =
+  | "horizontal"
+  | "vertical"
+  | "length"
+  | "fix"
+  | "parallel"
+  | "perpendicular"
+  | "equal";
 
 export class UI {
   private features: Feature[] = [];
@@ -81,6 +90,9 @@ export class UI {
           <button data-constraint="vertical" title="A aresta selecionada fica vertical">▮ Vert.</button>
           <button data-constraint="length" title="Cota: comprimento exato da aresta selecionada">⟺ Cota</button>
           <button data-constraint="fix" title="Fixa os dois vértices da aresta selecionada">⚓ Fixar</button>
+          <button data-constraint="parallel" title="Duas arestas selecionadas ficam paralelas">∥ Paral.</button>
+          <button data-constraint="perpendicular" title="Duas arestas selecionadas ficam perpendiculares">⊥ Perp.</button>
+          <button data-constraint="equal" title="Duas arestas selecionadas ficam do mesmo comprimento">= Igual</button>
           <span class="divider"></span>
           <button id="sketch-pad" disabled>Extrudar</button>
           <button id="sketch-pocket" disabled>Cortar (pocket)</button>
@@ -149,7 +161,7 @@ export class UI {
     );
     root.querySelectorAll<HTMLButtonElement>("[data-constraint]").forEach((btn) =>
       btn.addEventListener("click", () =>
-        callbacks.onConstraint(btn.dataset.constraint as "horizontal" | "vertical" | "length" | "fix"),
+        callbacks.onConstraint(btn.dataset.constraint as ConstraintKind),
       ),
     );
 

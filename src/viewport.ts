@@ -31,11 +31,33 @@ interface SketchSession {
   pendingVia: [number, number] | null;
   /** restrições geométricas do perfil (resolvidas pelo solver) */
   constraints: SketchConstraint[];
-  /** modo seleção: cliques escolhem uma aresta em vez de criar pontos */
+  /** modo seleção: cliques escolhem arestas (até 2) em vez de criar pontos */
   selectMode: boolean;
-  selectedEdge: number | null;
+  selectedEdges: number[];
   preview: THREE.Group;
   saved: { position: THREE.Vector3; up: THREE.Vector3; target: THREE.Vector3 };
+}
+
+/** Etiqueta de texto (cota/símbolo de restrição) com tamanho fixo em tela. */
+function makeLabel(text: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 192;
+  canvas.height = 48;
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = "bold 30px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#7dd3fc";
+  ctx.fillText(text, 96, 26);
+  const material = new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas),
+    sizeAttenuation: false,
+    depthTest: false,
+    transparent: true,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(0.12, 0.03, 1);
+  return sprite;
 }
 
 /** Distância de um ponto a um segmento 2D. */
@@ -268,7 +290,7 @@ export class Viewport {
       pendingVia: null,
       constraints,
       selectMode: false,
-      selectedEdge: null,
+      selectedEdges: [],
       preview,
       saved: {
         position: this.camera.position.clone(),
@@ -304,8 +326,11 @@ export class Viewport {
     else if (s.kind === "profile") {
       s.segments.pop();
       // descarta restrições que referenciam arestas que deixaram de existir
-      s.constraints = s.constraints.filter((c) => c.seg < s.segments.length);
-      s.selectedEdge = null;
+      const n = s.segments.length;
+      s.constraints = s.constraints.filter(
+        (c) => c.seg < n && !("other" in c && c.other >= n),
+      );
+      s.selectedEdges = [];
     } else s.clicks.pop();
     this.updateSketchPreview();
     this.emitSketchProgress();
@@ -316,39 +341,54 @@ export class Viewport {
     const s = this.sketch;
     if (!s || s.kind !== "profile") return false;
     s.selectMode = !s.selectMode;
-    if (!s.selectMode) s.selectedEdge = null;
+    if (!s.selectMode) s.selectedEdges = [];
     this.updateSketchPreview();
     return s.selectMode;
   }
 
-  /** Comprimento atual da aresta selecionada (para o valor padrão da cota). */
+  /** Quantas arestas estão selecionadas no sketch. */
+  selectedEdgeCount(): number {
+    return this.sketch?.selectedEdges.length ?? 0;
+  }
+
+  /** Comprimento da última aresta selecionada (valor padrão da cota). */
   selectedEdgeLength(): number | null {
     const s = this.sketch;
-    if (!s || s.selectedEdge === null) return null;
+    if (!s || s.selectedEdges.length === 0) return null;
     const n = s.segments.length;
-    const a = s.segments[s.selectedEdge].to;
-    const b = s.segments[(s.selectedEdge + 1) % n].to;
+    const i = s.selectedEdges[s.selectedEdges.length - 1];
+    const a = s.segments[i].to;
+    const b = s.segments[(i + 1) % n].to;
     return Math.hypot(b[0] - a[0], b[1] - a[1]);
   }
 
   /**
-   * Aplica uma restrição à aresta selecionada e roda o solver: os
+   * Aplica uma restrição às arestas selecionadas e roda o solver: os
    * vértices do desenho se movem para satisfazer todas as restrições.
+   * Restrições de uma aresta usam a última selecionada; as de duas
+   * (paralela/perpendicular/igual) usam o par selecionado.
    */
   applyConstraint(
-    kind: "horizontal" | "vertical" | "length" | "fix",
+    kind: "horizontal" | "vertical" | "length" | "fix" | "parallel" | "perpendicular" | "equal",
     value?: number,
   ): SolveResult | null {
     const s = this.sketch;
-    if (!s || s.kind !== "profile" || s.selectedEdge === null) return null;
-    const i = s.selectedEdge;
+    if (!s || s.kind !== "profile" || s.selectedEdges.length === 0) return null;
     const n = s.segments.length;
+    const i = s.selectedEdges[s.selectedEdges.length - 1];
+    const twoEdge = kind === "parallel" || kind === "perpendicular" || kind === "equal";
 
-    if (kind === "fix") {
+    let added = 1;
+    if (twoEdge) {
+      if (s.selectedEdges.length < 2) return null;
+      const [a, b] = s.selectedEdges;
+      s.constraints.push({ kind, seg: b, other: a });
+    } else if (kind === "fix") {
       s.constraints.push(
         { kind: "fix", seg: i, at: [...s.segments[i].to] },
         { kind: "fix", seg: (i + 1) % n, at: [...s.segments[(i + 1) % n].to] },
       );
+      added = 2;
     } else if (kind === "length") {
       s.constraints.push({ kind: "length", seg: i, value: value ?? 10 });
     } else {
@@ -362,8 +402,7 @@ export class Viewport {
     if (result.converged) {
       result.points.forEach((p, idx) => (s.segments[idx].to = p));
     } else {
-      s.constraints.pop(); // restrição conflitante: descarta
-      if (kind === "fix") s.constraints.pop();
+      s.constraints.splice(-added); // restrição conflitante: descarta
     }
     this.updateSketchPreview();
     return result;
@@ -431,7 +470,16 @@ export class Viewport {
         if (!best || d < best.dist) best = { edge: i, dist: d };
       }
       const threshold = Math.max(3, this.controls.getDistance() * 0.02);
-      s.selectedEdge = best && best.dist < threshold ? best.edge : null;
+      if (best && best.dist < threshold) {
+        const idx = s.selectedEdges.indexOf(best.edge);
+        if (idx >= 0) s.selectedEdges.splice(idx, 1); // clique de novo desmarca
+        else {
+          s.selectedEdges.push(best.edge);
+          if (s.selectedEdges.length > 2) s.selectedEdges.shift(); // mantém as 2 últimas
+        }
+      } else {
+        s.selectedEdges = [];
+      }
       this.updateSketchPreview();
       this.emitSketchProgress();
       return;
@@ -504,14 +552,64 @@ export class Viewport {
       s.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts3d), MAT_SKETCH));
     }
 
-    // aresta selecionada em destaque
-    if (s.selectedEdge !== null) {
-      const n = s.segments.length;
-      const a = this.sketchPointTo3D(s.segments[s.selectedEdge].to);
-      const b = this.sketchPointTo3D(s.segments[(s.selectedEdge + 1) % n].to);
+    // arestas selecionadas em destaque
+    const n = s.segments.length;
+    for (const edge of s.selectedEdges) {
+      const a = this.sketchPointTo3D(s.segments[edge].to);
+      const b = this.sketchPointTo3D(s.segments[(edge + 1) % n].to);
       s.preview.add(
         new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), MAT_EDGE_SELECTED),
       );
+    }
+
+    this.renderConstraintLabels();
+  }
+
+  /** Anota o desenho com as restrições: cotas, H/V, ∥, ⊥, =, ⚓. */
+  private renderConstraintLabels(): void {
+    const s = this.sketch!;
+    if (s.kind !== "profile" || s.segments.length < 2) return;
+    const n = s.segments.length;
+
+    // agrega os rótulos por aresta (e âncoras por vértice)
+    const edgeLabels = new Map<number, string[]>();
+    const vertexLabels = new Map<number, string>();
+    const push = (edge: number, text: string) => {
+      if (!edgeLabels.has(edge)) edgeLabels.set(edge, []);
+      edgeLabels.get(edge)!.push(text);
+    };
+    for (const c of s.constraints) {
+      switch (c.kind) {
+        case "horizontal": push(c.seg, "H"); break;
+        case "vertical": push(c.seg, "V"); break;
+        case "length": push(c.seg, String(+c.value.toFixed(2))); break;
+        case "parallel": push(c.seg, "∥"); push(c.other, "∥"); break;
+        case "perpendicular": push(c.seg, "⊥"); push(c.other, "⊥"); break;
+        case "equal": push(c.seg, "="); push(c.other, "="); break;
+        case "fix": vertexLabels.set(c.seg, "⚓"); break;
+      }
+    }
+
+    for (const [edge, texts] of edgeLabels) {
+      const a = s.segments[edge].to;
+      const b = s.segments[(edge + 1) % n].to;
+      // ponto médio deslocado pela normal 2D da aresta, para fora do traço
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const nx = -(b[1] - a[1]) / len;
+      const ny = (b[0] - a[0]) / len;
+      const mid: [number, number] = [
+        (a[0] + b[0]) / 2 + nx * 4,
+        (a[1] + b[1]) / 2 + ny * 4,
+      ];
+      const sprite = makeLabel([...new Set(texts)].join(" "));
+      sprite.position.copy(this.sketchPointTo3D(mid));
+      s.preview.add(sprite);
+    }
+    for (const [vertex, text] of vertexLabels) {
+      const sprite = makeLabel(text);
+      const p = s.segments[vertex % n].to;
+      sprite.position.copy(this.sketchPointTo3D([p[0] + 3, p[1] + 3]));
+      s.preview.add(sprite);
     }
   }
 

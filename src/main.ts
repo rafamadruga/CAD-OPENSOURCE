@@ -121,8 +121,13 @@ async function start(): Promise<void> {
       return on;
     },
     onConstraint: (kind) => {
-      if (viewport.selectedEdgeLength() === null) {
-        ui.setSketchHint("Selecione uma aresta primeiro (✥ Selecionar e clique no desenho).");
+      const needed = kind === "parallel" || kind === "perpendicular" || kind === "equal" ? 2 : 1;
+      if (viewport.selectedEdgeCount() < needed) {
+        ui.setSketchHint(
+          needed === 2
+            ? "Selecione duas arestas (✥ Selecionar e clique em cada uma)."
+            : "Selecione uma aresta primeiro (✥ Selecionar e clique no desenho).",
+        );
         return;
       }
       let value: number | undefined;
