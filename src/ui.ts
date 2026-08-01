@@ -6,6 +6,7 @@ import {
   FEATURE_SPECS,
   createFeature,
   type BooleanMode,
+  type EdgeRef,
   type Feature,
   type FeatureType,
 } from "./features";
@@ -14,12 +15,15 @@ interface UICallbacks {
   onModelChange: (features: Feature[]) => void;
   onExportSTL: () => void;
   onExportSTEP: () => void;
+  /** arestas atualmente selecionadas no viewport (para fillet seletivo) */
+  getSelectedEdgeRefs: () => EdgeRef[];
 }
 
 export class UI {
   private features: Feature[] = [];
   private treeEl: HTMLElement;
   private statusEl: HTMLElement;
+  private selectionEl: HTMLElement;
 
   constructor(root: HTMLElement, private callbacks: UICallbacks) {
     root.innerHTML = `
@@ -39,6 +43,7 @@ export class UI {
         <aside id="panel">
           <h2>Histórico de features</h2>
           <div id="tree"></div>
+          <p id="selection" class="hint">Clique numa aresta ou face do modelo para selecionar.</p>
           <p id="status"></p>
         </aside>
         <main id="viewport"></main>
@@ -47,6 +52,7 @@ export class UI {
 
     this.treeEl = root.querySelector("#tree")!;
     this.statusEl = root.querySelector("#status")!;
+    this.selectionEl = root.querySelector("#selection")!;
 
     root.querySelectorAll<HTMLButtonElement>("[data-add]").forEach((btn) =>
       btn.addEventListener("click", () =>
@@ -71,6 +77,17 @@ export class UI {
     this.statusEl.classList.toggle("error", isError);
   }
 
+  setSelection(sel: { faceId: number | null; edgeIds: number[] }): void {
+    if (sel.edgeIds.length > 0) {
+      const n = sel.edgeIds.length;
+      this.selectionEl.textContent = `${n} aresta${n > 1 ? "s" : ""} selecionada${n > 1 ? "s" : ""} — "Fillet" será aplicado só nela${n > 1 ? "s" : ""}.`;
+    } else if (sel.faceId !== null) {
+      this.selectionEl.textContent = "1 face selecionada.";
+    } else {
+      this.selectionEl.textContent = "Clique numa aresta ou face do modelo para selecionar.";
+    }
+  }
+
   /** Marca erros por feature após uma avaliação. */
   showErrors(errors: Map<number, string>): void {
     for (const f of this.features) f.error = errors.get(f.id);
@@ -78,7 +95,9 @@ export class UI {
   }
 
   private addFeature(type: FeatureType, mode: BooleanMode): void {
-    this.features.push(createFeature(type, mode));
+    const edgeRefs =
+      type === "fillet" ? this.callbacks.getSelectedEdgeRefs() : undefined;
+    this.features.push(createFeature(type, mode, edgeRefs));
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }

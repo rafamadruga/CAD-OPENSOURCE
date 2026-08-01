@@ -4,32 +4,50 @@
  */
 import type { Shape3D } from "replicad";
 
-import type { Feature } from "./features";
-import { evaluate, exportSTEP, exportSTL, initKernel, tessellate } from "./kernel";
+import type { EdgeRef, Feature } from "./features";
+import {
+  evaluate,
+  exportSTEP,
+  exportSTL,
+  initKernel,
+  tessellate,
+  type TessellatedBody,
+} from "./kernel";
 import { UI, downloadBlob } from "./ui";
-import { Viewport } from "./viewport";
+import { Viewport, type Selection } from "./viewport";
 import "./style.css";
 
 const app = document.querySelector<HTMLElement>("#app")!;
 
 let currentBody: Shape3D | null = null;
+let currentTess: TessellatedBody | null = null;
+let currentSelection: Selection = { faceId: null, edgeIds: [] };
 let viewport: Viewport;
 
 function rebuild(features: Feature[], ui: UI): void {
   const started = performance.now();
   const { body, errors } = evaluate(features);
   currentBody = body;
-  viewport.setBody(body ? tessellate(body) : null);
+  currentTess = body ? tessellate(body) : null;
+  viewport.setBody(currentTess); // limpa a seleção (a topologia mudou)
   ui.showErrors(errors);
 
   const ms = (performance.now() - started).toFixed(0);
   if (errors.size > 0) {
-    ui.setStatus(`Reconstruído com ${errors.size} erro(s) em ${ms} ms`, true);
+    ui.setStatus(`Reconstruído com ${errors.size} aviso(s) em ${ms} ms`, true);
   } else if (body) {
     ui.setStatus(`Reconstruído em ${ms} ms — ${features.length} feature(s)`);
   } else {
     ui.setStatus("Modelo vazio");
   }
+}
+
+/** Converte os ids de aresta selecionados nas impressões digitais estáveis. */
+function selectedEdgeRefs(): EdgeRef[] {
+  if (!currentTess) return [];
+  return currentSelection.edgeIds
+    .map((id) => currentTess!.edgeRefs.get(id))
+    .filter((r): r is EdgeRef => r !== undefined);
 }
 
 async function start(): Promise<void> {
@@ -43,10 +61,19 @@ async function start(): Promise<void> {
     onExportSTEP: () => {
       if (currentBody) downloadBlob(exportSTEP(currentBody), "modelo.step");
     },
+    getSelectedEdgeRefs: selectedEdgeRefs,
   });
 
-  viewport = new Viewport(ui.viewportEl);
+  viewport = new Viewport(ui.viewportEl, (sel) => {
+    currentSelection = sel;
+    ui.setSelection(sel);
+  });
   ui.setStatus("Kernel pronto. Adicione uma primitiva para começar.");
+
+  // gancho de depuração para os testes E2E
+  (window as unknown as { __cad: object }).__cad = {
+    project: (x: number, y: number, z: number) => viewport.projectToScreen(x, y, z),
+  };
 }
 
 start().catch((e) => {

@@ -10,7 +10,8 @@ CAD paramétrico de modelagem 3D que roda **no navegador** — gratuito e open-s
 - **Modelagem paramétrica com histórico**: árvore de features reavaliada a cada mudança de parâmetro (history-based modeling, como FreeCAD/SolidWorks)
 - **Primitivas**: caixa, cilindro, esfera — com posição editável
 - **Operações booleanas**: adicionar (fuse) e cortar (furos)
-- **Fillet** (arredondamento de arestas)
+- **Seleção no viewport (picking)**: clique em arestas (multi-seleção) e faces, com destaque visual — raycasting mapeado de volta às entidades topológicas do B-rep
+- **Fillet seletivo**: arredonda só as arestas selecionadas (ou todas, se nada estiver selecionado). As referências de aresta sobrevivem à reconstrução paramétrica via impressão digital geométrica + fallback por índice topológico (mitigação do *topological naming problem*)
 - **Viewport 3D**: sombreamento + arestas técnicas, órbita/zoom/pan, convenção Z-para-cima
 - **Exportação**: **STL** (impressão 3D) e **STEP** (B-rep exato, abre em qualquer CAD profissional)
 
@@ -41,10 +42,11 @@ mudança de parâmetro → **reavaliação do histórico de features** (chamando
 
 - [x] Viewport 3D + primitivas do kernel
 - [x] Booleanas (união/corte) e export STL/STEP
-- [ ] Seleção de faces/arestas no viewport (picking)
+- [x] Seleção de faces/arestas no viewport (picking)
+- [x] Fillet seletivo (só nas arestas escolhidas)
 - [ ] Sketch 2D → extrusão (o fluxo CAD "de verdade")
 - [ ] Solver de restrições geométricas no sketch
-- [ ] Fillet/chamfer seletivo (só nas arestas escolhidas)
+- [ ] Chamfer + operações baseadas em face selecionada
 - [ ] Undo/redo e salvar/abrir documento nativo
 - [ ] Import STEP
 - [ ] Desenho técnico 2D (projeções)
