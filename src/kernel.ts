@@ -118,51 +118,73 @@ export function evaluate(features: Feature[]): EvaluationResult {
   const errors = new Map<number, string>();
   let body: Shape3D | null = null;
 
+  /**
+   * Resolve o sketch consumido por um pad/revolução, re-ancorando o
+   * plano na face de referência do corpo atual quando houver uma.
+   */
+  const resolveSketch = (f: Feature): SketchData => {
+    const sketchFeature = features.find((x) => x.id === f.sketchId && x.type === "sketch");
+    if (!sketchFeature?.sketch) throw new Error("Sketch de referência não encontrado");
+    let sketchData = sketchFeature.sketch;
+    if (sketchData.faceRef && body) {
+      const plane = resolveFacePlane(body, sketchData.faceRef);
+      if (plane) sketchData = { ...sketchData, plane };
+      else
+        errors.set(
+          sketchFeature.id,
+          "Face de referência não reencontrada — usando o plano original",
+        );
+    }
+    return sketchData;
+  };
+
+  const combine = (f: Feature, solid: Shape3D): Shape3D => {
+    if (!body) {
+      if (f.mode === "cut") throw new Error("Não há corpo para cortar");
+      return solid;
+    }
+    return f.mode === "add" ? body.fuse(solid) : body.cut(solid);
+  };
+
   for (const f of features) {
     try {
-      // o sketch em si não altera o corpo — ele é consumido pelo pad
+      // o sketch em si não altera o corpo — ele é consumido pelo pad/revolução
       if (f.type === "sketch") continue;
 
       if (f.type === "pad") {
-        const sketchFeature = features.find(
-          (x) => x.id === f.sketchId && x.type === "sketch",
-        );
-        if (!sketchFeature?.sketch) throw new Error("Sketch de referência não encontrado");
-
-        // sketch ancorado numa face: re-resolve o plano no corpo atual,
-        // para o sketch acompanhar a face quando o modelo muda
-        let sketchData = sketchFeature.sketch;
-        if (sketchData.faceRef && body) {
-          const plane = resolveFacePlane(body, sketchData.faceRef);
-          if (plane) sketchData = { ...sketchData, plane };
-          else
-            errors.set(
-              sketchFeature.id,
-              "Face de referência não reencontrada — usando o plano original",
-            );
-        }
-
         // pad cresce para fora do plano; pocket corta para dentro
         const distance = f.mode === "cut" ? -f.params.distance : f.params.distance;
-        const solid = buildSketch(sketchData).extrude(distance) as Shape3D;
-        if (!body) {
-          if (f.mode === "cut") throw new Error("Não há corpo para cortar");
-          body = solid;
-        } else {
-          body = f.mode === "add" ? body.fuse(solid) : body.cut(solid);
-        }
+        body = combine(f, buildSketch(resolveSketch(f)).extrude(distance) as Shape3D);
         continue;
       }
 
-      if (f.type === "fillet") {
-        if (!body) throw new Error("Não há corpo para aplicar o fillet");
+      if (f.type === "revolve") {
+        const s = resolveSketch(f);
+        // eixo de revolução: o Y local do plano (o eixo vertical na vista de sketch)
+        const n = s.plane.normal;
+        const x = s.plane.xDir;
+        const yDir: [number, number, number] = [
+          n[1] * x[2] - n[2] * x[1],
+          n[2] * x[0] - n[0] * x[2],
+          n[0] * x[1] - n[1] * x[0],
+        ];
+        const solid = buildSketch(s).revolve(yDir, {
+          origin: s.plane.origin,
+          angle: f.params.angle,
+        }) as Shape3D;
+        body = combine(f, solid);
+        continue;
+      }
+
+      if (f.type === "fillet" || f.type === "chamfer") {
+        if (!body) throw new Error(`Não há corpo para aplicar o ${f.type}`);
+        const apply = (radiusConfig: (e: Edge) => number | null): Shape3D =>
+          f.type === "fillet" ? body!.fillet(radiusConfig) : body!.chamfer(radiusConfig);
         const refs = f.edgeRefs;
         if (refs && refs.length > 0) {
           const selected = resolveEdgeRefs(body.edges, refs);
           if (selected.size === 0) throw new Error("Nenhuma aresta de referência reencontrada");
-          body = body.fillet((edge) =>
-            selected.has(edge.hashCode) ? f.params.radius : null,
-          );
+          body = apply((edge) => (selected.has(edge.hashCode) ? f.params.radius : null));
           if (selected.size < refs.length) {
             errors.set(
               f.id,
@@ -170,18 +192,12 @@ export function evaluate(features: Feature[]): EvaluationResult {
             );
           }
         } else {
-          body = body.fillet(f.params.radius);
+          body = apply(() => f.params.radius);
         }
         continue;
       }
 
-      const shape = buildPrimitive(f);
-      if (!body) {
-        if (f.mode === "cut") throw new Error("Não há corpo para cortar");
-        body = shape;
-      } else {
-        body = f.mode === "add" ? body.fuse(shape) : body.cut(shape);
-      }
+      body = combine(f, buildPrimitive(f));
     } catch (e) {
       errors.set(f.id, e instanceof Error ? e.message : String(e));
     }

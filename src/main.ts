@@ -90,11 +90,11 @@ async function start(): Promise<void> {
           : `Clique no centro e depois num ponto da borda do círculo ${where}.`,
       );
     },
-    onFinishSketch: (mode) => {
+    onFinishSketch: (action) => {
       const entity = viewport.finishSketch();
       ui.setSketchMode(false);
       if (entity)
-        ui.addSketchAndPad({ plane: sketchPlane, entity, faceRef: sketchFaceRef }, mode);
+        ui.addSketchAndOp({ plane: sketchPlane, entity, faceRef: sketchFaceRef }, action);
     },
     onCancelSketch: () => {
       viewport.cancelSketch();

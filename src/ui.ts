@@ -5,6 +5,8 @@
 import {
   FEATURE_SPECS,
   createFeature,
+  ensureIdsAbove,
+  isEdgeFeature,
   type BooleanMode,
   type EdgeRef,
   type Feature,
@@ -13,14 +15,19 @@ import {
   type SketchEntity,
 } from "./features";
 
+/** O que fazer com o sketch concluído. */
+export type SketchAction = "pad" | "pocket" | "revolve";
+
+const FILE_VERSION = 1;
+
 interface UICallbacks {
   onModelChange: (features: Feature[]) => void;
   onExportSTL: () => void;
   onExportSTEP: () => void;
-  /** arestas atualmente selecionadas no viewport (para fillet seletivo) */
+  /** arestas atualmente selecionadas no viewport (para fillet/chamfer seletivo) */
   getSelectedEdgeRefs: () => EdgeRef[];
   onStartSketch: (kind: SketchEntity["kind"]) => void;
-  onFinishSketch: (mode: BooleanMode) => void;
+  onFinishSketch: (action: SketchAction) => void;
   onCancelSketch: () => void;
 }
 
@@ -42,7 +49,15 @@ export class UI {
           <button data-add="cylinder">+ Cilindro</button>
           <button data-cut="cylinder">− Furo cilíndrico</button>
           <button data-add="sphere">+ Esfera</button>
+          <span class="divider"></span>
           <button data-add="fillet">Fillet</button>
+          <button data-add="chamfer">Chamfer</button>
+          <span class="divider"></span>
+          <button id="undo" title="Desfazer (Ctrl+Z)">↶</button>
+          <button id="redo" title="Refazer (Ctrl+Shift+Z)">↷</button>
+          <button id="save-doc" title="Salvar documento (.cad.json)">Salvar</button>
+          <button id="open-doc" title="Abrir documento salvo">Abrir</button>
+          <input id="open-file" type="file" accept=".json,application/json" class="hidden" />
           <span class="spacer"></span>
           <button id="export-stl" title="Malha para impressão 3D">Exportar STL</button>
           <button id="export-step" title="B-rep exato, abre em qualquer CAD">Exportar STEP</button>
@@ -51,8 +66,9 @@ export class UI {
           <span class="brand sketch-brand">✏ Modo Sketch</span>
           <span id="sketch-hint"></span>
           <span class="spacer"></span>
-          <button id="sketch-pad" disabled>Extrudar (adicionar)</button>
+          <button id="sketch-pad" disabled>Extrudar</button>
           <button id="sketch-pocket" disabled>Cortar (pocket)</button>
+          <button id="sketch-revolve" disabled title="Gira o perfil em torno do eixo vertical da vista de sketch">Revolucionar</button>
           <button id="sketch-cancel">Cancelar</button>
         </div>
       </header>
@@ -90,12 +106,94 @@ export class UI {
       ),
     );
     root.querySelector("#sketch-pad")!.addEventListener("click", () =>
-      callbacks.onFinishSketch("add"),
+      callbacks.onFinishSketch("pad"),
     );
     root.querySelector("#sketch-pocket")!.addEventListener("click", () =>
-      callbacks.onFinishSketch("cut"),
+      callbacks.onFinishSketch("pocket"),
+    );
+    root.querySelector("#sketch-revolve")!.addEventListener("click", () =>
+      callbacks.onFinishSketch("revolve"),
     );
     root.querySelector("#sketch-cancel")!.addEventListener("click", callbacks.onCancelSketch);
+
+    root.querySelector("#undo")!.addEventListener("click", () => this.undo());
+    root.querySelector("#redo")!.addEventListener("click", () => this.redo());
+    window.addEventListener("keydown", (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.target instanceof HTMLInputElement) return;
+      if (e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (e.shiftKey) this.redo();
+        else this.undo();
+      } else if (e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        this.redo();
+      }
+    });
+
+    root.querySelector("#save-doc")!.addEventListener("click", () => this.saveDocument());
+    const fileInput = root.querySelector<HTMLInputElement>("#open-file")!;
+    root.querySelector("#open-doc")!.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = "";
+      if (file) await this.openDocument(file);
+    });
+  }
+
+  // ── undo/redo: snapshots do histórico de features ──
+
+  private past: Feature[][] = [];
+  private future: Feature[][] = [];
+
+  /** Chamado antes de cada mutação do modelo. */
+  private snapshot(): void {
+    this.past.push(structuredClone(this.features));
+    if (this.past.length > 100) this.past.shift();
+    this.future = [];
+  }
+
+  undo(): void {
+    const prev = this.past.pop();
+    if (!prev) return;
+    this.future.push(structuredClone(this.features));
+    this.features = prev;
+    this.renderTree();
+    this.callbacks.onModelChange(this.features);
+  }
+
+  redo(): void {
+    const next = this.future.pop();
+    if (!next) return;
+    this.past.push(structuredClone(this.features));
+    this.features = next;
+    this.renderTree();
+    this.callbacks.onModelChange(this.features);
+  }
+
+  // ── salvar/abrir: o documento nativo é o histórico serializado ──
+
+  private saveDocument(): void {
+    const doc = { app: "cad-opensource", version: FILE_VERSION, features: this.features };
+    downloadBlob(
+      new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" }),
+      "modelo.cad.json",
+    );
+  }
+
+  private async openDocument(file: File): Promise<void> {
+    try {
+      const doc = JSON.parse(await file.text());
+      if (doc?.app !== "cad-opensource" || !Array.isArray(doc.features)) {
+        throw new Error("Formato de arquivo não reconhecido");
+      }
+      this.snapshot();
+      this.features = doc.features as Feature[];
+      ensureIdsAbove(this.features);
+      this.renderTree();
+      this.callbacks.onModelChange(this.features);
+    } catch (e) {
+      this.setStatus(`Falha ao abrir: ${e instanceof Error ? e.message : e}`, true);
+    }
   }
 
   /** Alterna a barra para o modo sketch (ou de volta). */
@@ -113,13 +211,20 @@ export class UI {
   setSketchReady(ready: boolean): void {
     document.querySelector<HTMLButtonElement>("#sketch-pad")!.disabled = !ready;
     document.querySelector<HTMLButtonElement>("#sketch-pocket")!.disabled = !ready;
+    document.querySelector<HTMLButtonElement>("#sketch-revolve")!.disabled = !ready;
   }
 
-  /** Adiciona o par Sketch + Pad/Pocket ao histórico. */
-  addSketchAndPad(sketch: SketchData, mode: BooleanMode): void {
+  /** Adiciona o par Sketch + operação (pad/pocket/revolução) ao histórico. */
+  addSketchAndOp(sketch: SketchData, action: SketchAction): void {
+    this.snapshot();
     const sketchFeature = createFeature("sketch", "add", { sketch });
-    const padFeature = createFeature("pad", mode, { sketchId: sketchFeature.id });
-    this.features.push(sketchFeature, padFeature);
+    const op =
+      action === "revolve"
+        ? createFeature("revolve", "add", { sketchId: sketchFeature.id })
+        : createFeature("pad", action === "pocket" ? "cut" : "add", {
+            sketchId: sketchFeature.id,
+          });
+    this.features.push(sketchFeature, op);
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }
@@ -136,7 +241,7 @@ export class UI {
   setSelection(sel: { faceId: number | null; edgeIds: number[] }): void {
     if (sel.edgeIds.length > 0) {
       const n = sel.edgeIds.length;
-      this.selectionEl.textContent = `${n} aresta${n > 1 ? "s" : ""} selecionada${n > 1 ? "s" : ""} — "Fillet" será aplicado só nela${n > 1 ? "s" : ""}.`;
+      this.selectionEl.textContent = `${n} aresta${n > 1 ? "s" : ""} selecionada${n > 1 ? "s" : ""} — Fillet/Chamfer será aplicado só nela${n > 1 ? "s" : ""}.`;
     } else if (sel.faceId !== null) {
       this.selectionEl.textContent = "1 face selecionada.";
     } else {
@@ -151,14 +256,15 @@ export class UI {
   }
 
   private addFeature(type: FeatureType, mode: BooleanMode): void {
-    const edgeRefs =
-      type === "fillet" ? this.callbacks.getSelectedEdgeRefs() : undefined;
+    this.snapshot();
+    const edgeRefs = isEdgeFeature(type) ? this.callbacks.getSelectedEdgeRefs() : undefined;
     this.features.push(createFeature(type, mode, { edgeRefs }));
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }
 
   private removeFeature(id: number): void {
+    this.snapshot();
     // remover um sketch remove também os pads que dependem dele
     this.features = this.features.filter((f) => f.id !== id && f.sketchId !== id);
     this.renderTree();
@@ -210,6 +316,7 @@ export class UI {
         input.addEventListener("change", () => {
           const value = Number(input.value);
           if (Number.isFinite(value)) {
+            this.snapshot();
             f.params[spec.key] = spec.min !== undefined ? Math.max(spec.min, value) : value;
             input.value = String(f.params[spec.key]);
             this.callbacks.onModelChange(this.features);

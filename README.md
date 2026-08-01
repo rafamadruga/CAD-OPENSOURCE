@@ -13,6 +13,10 @@ CAD paramétrico de modelagem 3D que roda **no navegador** — gratuito e open-s
 - **Seleção no viewport (picking)**: clique em arestas (multi-seleção) e faces, com destaque visual — raycasting mapeado de volta às entidades topológicas do B-rep
 - **Fillet seletivo**: arredonda só as arestas selecionadas (ou todas, se nada estiver selecionado). As referências de aresta sobrevivem à reconstrução paramétrica via impressão digital geométrica + fallback por índice topológico (mitigação do *topological naming problem*)
 - **Sketch 2D → extrusão**: desenhe um polígono ou círculo no plano XY **ou sobre uma face plana selecionada**, e extrude (pad) ou corte (pocket) com distância paramétrica. Sketches ancorados em face **acompanham a face** quando o modelo muda (a referência de face é re-resolvida a cada reconstrução)
+- **Revolução (lathe)**: gire o perfil do sketch em torno do eixo vertical da vista de sketch, com ângulo paramétrico
+- **Chamfer seletivo**: mesma mecânica do fillet, nas arestas clicadas
+- **Undo/Redo** (Ctrl+Z / Ctrl+Shift+Z) com snapshots do histórico
+- **Salvar/Abrir documento nativo** (`.cad.json`): o histórico paramétrico completo é serializado — reabra e continue editando
 - **Viewport 3D**: sombreamento + arestas técnicas, órbita/zoom/pan, convenção Z-para-cima
 - **Exportação**: **STL** (impressão 3D) e **STEP** (B-rep exato, abre em qualquer CAD profissional)
 
@@ -46,10 +50,12 @@ mudança de parâmetro → **reavaliação do histórico de features** (chamando
 - [x] Seleção de faces/arestas no viewport (picking)
 - [x] Fillet seletivo (só nas arestas escolhidas)
 - [x] Sketch 2D (polígono/círculo) → pad/pocket, inclusive sobre faces
+- [x] Chamfer seletivo e revolução (lathe)
+- [x] Undo/redo e salvar/abrir documento nativo
 - [ ] Sketch com linhas + arcos e edição de sketch existente
 - [ ] Solver de restrições geométricas no sketch
-- [ ] Chamfer, revolução (lathe) e sweep
-- [ ] Undo/redo e salvar/abrir documento nativo
+- [ ] Sweep e loft
+- [ ] Import STEP e desenho técnico 2D
 - [ ] Import STEP
 - [ ] Desenho técnico 2D (projeções)
 

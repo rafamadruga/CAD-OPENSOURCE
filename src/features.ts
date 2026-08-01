@@ -7,7 +7,15 @@
  * na versão linear mais simples (um único corpo).
  */
 
-export type FeatureType = "box" | "cylinder" | "sphere" | "fillet" | "sketch" | "pad";
+export type FeatureType =
+  | "box"
+  | "cylinder"
+  | "sphere"
+  | "fillet"
+  | "chamfer"
+  | "sketch"
+  | "pad"
+  | "revolve";
 
 /** Plano de sketch no espaço: origem + base ortonormal. */
 export interface SketchPlaneData {
@@ -109,8 +117,10 @@ export const FEATURE_SPECS: Record<FeatureType, ParamSpec[]> = {
     { key: "z", label: "Posição Z", default: 0 },
   ],
   fillet: [{ key: "radius", label: "Raio", min: 0.01, default: 2 }],
+  chamfer: [{ key: "radius", label: "Distância", min: 0.01, default: 2 }],
   sketch: [],
   pad: [{ key: "distance", label: "Distância", min: 0.1, default: 20 }],
+  revolve: [{ key: "angle", label: "Ângulo (°)", min: 1, default: 360 }],
 };
 
 const TYPE_LABELS: Record<FeatureType, string> = {
@@ -118,9 +128,16 @@ const TYPE_LABELS: Record<FeatureType, string> = {
   cylinder: "Cilindro",
   sphere: "Esfera",
   fillet: "Fillet",
+  chamfer: "Chamfer",
   sketch: "Sketch",
   pad: "Pad",
+  revolve: "Revolução",
 };
+
+/** Features que operam sobre arestas selecionadas. */
+export function isEdgeFeature(type: FeatureType): type is "fillet" | "chamfer" {
+  return type === "fillet" || type === "chamfer";
+}
 
 let nextId = 1;
 
@@ -137,15 +154,24 @@ export function createFeature(
   let prefix = "";
   if (type === "pad") {
     label = mode === "cut" ? "Pocket" : "Pad";
-  } else if (type !== "fillet" && type !== "sketch" && mode === "cut") {
+  } else if (!isEdgeFeature(type) && type !== "sketch" && type !== "revolve" && mode === "cut") {
     prefix = "Furo ";
   }
 
   let name = `${prefix}${label} ${id}`;
-  if (type === "fillet") {
+  if (isEdgeFeature(type)) {
     name += extra?.edgeRefs?.length
       ? ` (${extra.edgeRefs.length} aresta${extra.edgeRefs.length > 1 ? "s" : ""})`
       : " (todas as arestas)";
   }
   return { id, type, name, mode, params, ...extra };
+}
+
+/**
+ * Garante que ids futuros não colidam com features carregadas de um
+ * arquivo salvo.
+ */
+export function ensureIdsAbove(features: Feature[]): void {
+  const maxId = features.reduce((m, f) => Math.max(m, f.id), 0);
+  if (maxId >= nextId) nextId = maxId + 1;
 }
