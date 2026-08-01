@@ -33,6 +33,9 @@ interface UICallbacks {
   onToggleArc: () => boolean;
   onUndoPoint: () => void;
   onEditSketch: (featureId: number) => void;
+  /** liga/desliga o modo de seleção de aresta; retorna o estado */
+  onToggleSelect: () => boolean;
+  onConstraint: (kind: "horizontal" | "vertical" | "length" | "fix") => void;
 }
 
 export class UI {
@@ -72,6 +75,12 @@ export class UI {
           <span class="spacer"></span>
           <button id="sketch-arc" title="O próximo trecho será um arco: clique o ponto de passagem e depois o fim">◠ Arco</button>
           <button id="sketch-undo-point" title="Remove o último ponto clicado">⌫ Ponto</button>
+          <span class="divider"></span>
+          <button id="sketch-select" title="Clique numa aresta do desenho para selecioná-la e aplicar restrições">✥ Selecionar</button>
+          <button data-constraint="horizontal" title="A aresta selecionada fica horizontal">▬ Horiz.</button>
+          <button data-constraint="vertical" title="A aresta selecionada fica vertical">▮ Vert.</button>
+          <button data-constraint="length" title="Cota: comprimento exato da aresta selecionada">⟺ Cota</button>
+          <button data-constraint="fix" title="Fixa os dois vértices da aresta selecionada">⚓ Fixar</button>
           <span class="divider"></span>
           <button id="sketch-pad" disabled>Extrudar</button>
           <button id="sketch-pocket" disabled>Cortar (pocket)</button>
@@ -134,6 +143,15 @@ export class UI {
       callbacks.onUndoPoint();
       arcBtn.classList.remove("active");
     });
+    const selectBtn = root.querySelector<HTMLButtonElement>("#sketch-select")!;
+    selectBtn.addEventListener("click", () =>
+      selectBtn.classList.toggle("active", callbacks.onToggleSelect()),
+    );
+    root.querySelectorAll<HTMLButtonElement>("[data-constraint]").forEach((btn) =>
+      btn.addEventListener("click", () =>
+        callbacks.onConstraint(btn.dataset.constraint as "horizontal" | "vertical" | "length" | "fix"),
+      ),
+    );
 
     root.querySelector("#undo")!.addEventListener("click", () => this.undo());
     root.querySelector("#redo")!.addEventListener("click", () => this.redo());
@@ -226,6 +244,7 @@ export class UI {
     document.querySelector("#sketch-revolve")!.classList.toggle("hidden", editing);
     document.querySelector("#sketch-done")!.classList.toggle("hidden", !editing);
     document.querySelector("#sketch-arc")!.classList.remove("active");
+    document.querySelector("#sketch-select")!.classList.remove("active");
     if (active) this.setSketchReady(false);
   }
 

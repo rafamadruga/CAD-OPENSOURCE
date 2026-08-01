@@ -13,6 +13,7 @@ CAD paramétrico de modelagem 3D que roda **no navegador** — gratuito e open-s
 - **Seleção no viewport (picking)**: clique em arestas (multi-seleção) e faces, com destaque visual — raycasting mapeado de volta às entidades topológicas do B-rep
 - **Fillet seletivo**: arredonda só as arestas selecionadas (ou todas, se nada estiver selecionado). As referências de aresta sobrevivem à reconstrução paramétrica via impressão digital geométrica + fallback por índice topológico (mitigação do *topological naming problem*)
 - **Sketch 2D → extrusão**: desenhe um polígono ou círculo no plano XY **ou sobre uma face plana selecionada**, e extrude (pad) ou corte (pocket) com distância paramétrica. Sketches ancorados em face **acompanham a face** quando o modelo muda (a referência de face é re-resolvida a cada reconstrução)
+- **Solver de restrições geométricas**: no modo sketch, selecione uma aresta (✥) e aplique Horizontal, Vertical, Cota (comprimento exato) ou Fixar. O solver (Gauss-Newton amortecido com jacobiano numérico, em `src/solver.ts`) move os vértices para satisfazer todas as restrições simultaneamente, mostra os graus de liberdade restantes e **rejeita restrições conflitantes**. As restrições ficam salvas no sketch e são reaplicadas na edição
 - **Revolução (lathe)**: gire o perfil do sketch em torno do eixo vertical da vista de sketch, com ângulo paramétrico
 - **Chamfer seletivo**: mesma mecânica do fillet, nas arestas clicadas
 - **Undo/Redo** (Ctrl+Z / Ctrl+Shift+Z) com snapshots do histórico
@@ -54,7 +55,8 @@ mudança de parâmetro → **reavaliação do histórico de features** (chamando
 - [x] Undo/redo e salvar/abrir documento nativo
 - [x] Sketch com linhas + arcos (três pontos), desfazer ponto e edição de sketch existente
 - [x] Edição numérica de círculos de sketch (centro/raio)
-- [ ] Solver de restrições geométricas no sketch
+- [x] Solver de restrições geométricas (horizontal, vertical, cota, fixar) com Gauss-Newton
+- [ ] Mais restrições (paralela, perpendicular, tangente, ângulo) e cotas visíveis no desenho
 - [ ] Sweep e loft
 - [ ] Import STEP e desenho técnico 2D
 - [ ] Import STEP

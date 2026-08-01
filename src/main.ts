@@ -111,6 +111,36 @@ async function start(): Promise<void> {
     },
     onToggleArc: () => viewport.toggleArcMode(),
     onUndoPoint: () => viewport.undoSketchPoint(),
+    onToggleSelect: () => {
+      const on = viewport.toggleSketchSelect();
+      ui.setSketchHint(
+        on
+          ? "Modo seleção: clique numa aresta reta do desenho e aplique uma restrição."
+          : "Modo desenho: clique para adicionar pontos.",
+      );
+      return on;
+    },
+    onConstraint: (kind) => {
+      if (viewport.selectedEdgeLength() === null) {
+        ui.setSketchHint("Selecione uma aresta primeiro (✥ Selecionar e clique no desenho).");
+        return;
+      }
+      let value: number | undefined;
+      if (kind === "length") {
+        const current = viewport.selectedEdgeLength()!;
+        const answer = window.prompt("Comprimento da aresta (mm):", current.toFixed(1));
+        if (answer === null) return;
+        value = Number(answer);
+        if (!Number.isFinite(value) || value <= 0) return;
+      }
+      const result = viewport.applyConstraint(kind, value);
+      if (!result) return;
+      ui.setSketchHint(
+        result.converged
+          ? `Resolvido ✓ — erro ${result.maxError.toExponential(1)}, ${result.dof} GDL restantes.`
+          : "⚠ Restrição conflitante — descartada (o desenho não mudou).",
+      );
+    },
     onEditSketch: (featureId) => {
       const feature = ui.getFeature(featureId);
       if (!feature?.sketch) return;

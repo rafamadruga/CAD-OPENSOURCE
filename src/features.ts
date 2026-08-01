@@ -24,6 +24,8 @@ export interface SketchPlaneData {
   normal: [number, number, number];
 }
 
+import type { SketchConstraint } from "./solver";
+
 /**
  * Trecho de um perfil 2D. O primeiro segmento define o ponto inicial
  * (via ignorado); nos demais, `via` presente = arco por três pontos.
@@ -36,7 +38,7 @@ export interface ProfileSegment {
 /** Geometria 2D desenhada, em coordenadas locais do plano. */
 export type SketchEntity =
   | { kind: "polygon"; points: [number, number][] } // legado (arquivos antigos)
-  | { kind: "profile"; segments: ProfileSegment[] } // linhas + arcos
+  | { kind: "profile"; segments: ProfileSegment[]; constraints?: SketchConstraint[] }
   | { kind: "circle"; center: [number, number]; radius: number };
 
 /** Converte a entidade legada em perfil (para edição uniforme). */

@@ -11,6 +11,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import type { TessellatedBody, TopoGroup } from "./kernel";
 import { toProfile, type ProfileSegment, type SketchEntity, type SketchPlaneData } from "./features";
+import { solveSketch, type SketchConstraint, type SolveResult } from "./solver";
 
 export interface Selection {
   faceId: number | null;
@@ -28,8 +29,26 @@ interface SketchSession {
   /** próximo trecho será um arco: 1º clique = ponto de passagem, 2º = fim */
   arcArmed: boolean;
   pendingVia: [number, number] | null;
+  /** restrições geométricas do perfil (resolvidas pelo solver) */
+  constraints: SketchConstraint[];
+  /** modo seleção: cliques escolhem uma aresta em vez de criar pontos */
+  selectMode: boolean;
+  selectedEdge: number | null;
   preview: THREE.Group;
   saved: { position: THREE.Vector3; up: THREE.Vector3; target: THREE.Vector3 };
+}
+
+/** Distância de um ponto a um segmento 2D. */
+function distToSegment(
+  p: [number, number],
+  a: [number, number],
+  b: [number, number],
+): number {
+  const abx = b[0] - a[0];
+  const aby = b[1] - a[1];
+  const len2 = abx * abx + aby * aby;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / len2));
+  return Math.hypot(p[0] - (a[0] + t * abx), p[1] - (a[1] + t * aby));
 }
 
 /** Amostra um arco por três pontos (coordenadas 2D locais do plano). */
@@ -224,10 +243,13 @@ export class Viewport {
 
     let segments: ProfileSegment[] = [];
     let clicks: [number, number][] = [];
+    let constraints: SketchConstraint[] = [];
     if (initial) {
       const entity = toProfile(initial);
-      if (entity.kind === "profile") segments = structuredClone(entity.segments);
-      else if (entity.kind === "circle") {
+      if (entity.kind === "profile") {
+        segments = structuredClone(entity.segments);
+        constraints = structuredClone(entity.constraints ?? []);
+      } else if (entity.kind === "circle") {
         clicks = [
           entity.center,
           [entity.center[0] + entity.radius, entity.center[1]],
@@ -244,6 +266,9 @@ export class Viewport {
       clicks,
       arcArmed: false,
       pendingVia: null,
+      constraints,
+      selectMode: false,
+      selectedEdge: null,
       preview,
       saved: {
         position: this.camera.position.clone(),
@@ -276,10 +301,72 @@ export class Viewport {
     const s = this.sketch;
     if (!s) return;
     if (s.pendingVia) s.pendingVia = null;
-    else if (s.kind === "profile") s.segments.pop();
-    else s.clicks.pop();
+    else if (s.kind === "profile") {
+      s.segments.pop();
+      // descarta restrições que referenciam arestas que deixaram de existir
+      s.constraints = s.constraints.filter((c) => c.seg < s.segments.length);
+      s.selectedEdge = null;
+    } else s.clicks.pop();
     this.updateSketchPreview();
     this.emitSketchProgress();
+  }
+
+  /** Liga/desliga o modo de seleção de aresta no sketch. */
+  toggleSketchSelect(): boolean {
+    const s = this.sketch;
+    if (!s || s.kind !== "profile") return false;
+    s.selectMode = !s.selectMode;
+    if (!s.selectMode) s.selectedEdge = null;
+    this.updateSketchPreview();
+    return s.selectMode;
+  }
+
+  /** Comprimento atual da aresta selecionada (para o valor padrão da cota). */
+  selectedEdgeLength(): number | null {
+    const s = this.sketch;
+    if (!s || s.selectedEdge === null) return null;
+    const n = s.segments.length;
+    const a = s.segments[s.selectedEdge].to;
+    const b = s.segments[(s.selectedEdge + 1) % n].to;
+    return Math.hypot(b[0] - a[0], b[1] - a[1]);
+  }
+
+  /**
+   * Aplica uma restrição à aresta selecionada e roda o solver: os
+   * vértices do desenho se movem para satisfazer todas as restrições.
+   */
+  applyConstraint(
+    kind: "horizontal" | "vertical" | "length" | "fix",
+    value?: number,
+  ): SolveResult | null {
+    const s = this.sketch;
+    if (!s || s.kind !== "profile" || s.selectedEdge === null) return null;
+    const i = s.selectedEdge;
+    const n = s.segments.length;
+
+    if (kind === "fix") {
+      s.constraints.push(
+        { kind: "fix", seg: i, at: [...s.segments[i].to] },
+        { kind: "fix", seg: (i + 1) % n, at: [...s.segments[(i + 1) % n].to] },
+      );
+    } else if (kind === "length") {
+      s.constraints.push({ kind: "length", seg: i, value: value ?? 10 });
+    } else {
+      s.constraints.push({ kind, seg: i });
+    }
+
+    const result = solveSketch(
+      s.segments.map((seg) => seg.to),
+      s.constraints,
+    );
+    if (result.converged) {
+      result.points.forEach((p, idx) => (s.segments[idx].to = p));
+    } else {
+      s.constraints.pop(); // restrição conflitante: descarta
+      if (kind === "fix") s.constraints.pop();
+    }
+    this.updateSketchPreview();
+    return result;
   }
 
   private emitSketchProgress(): void {
@@ -304,7 +391,7 @@ export class Viewport {
 
     let entity: SketchEntity | null = null;
     if (s.kind === "profile" && s.segments.length >= 3) {
-      entity = { kind: "profile", segments: s.segments };
+      entity = { kind: "profile", segments: s.segments, constraints: s.constraints };
     } else if (s.kind === "circle" && s.clicks.length >= 2) {
       const [c, r] = s.clicks;
       const radius = Math.hypot(r[0] - c[0], r[1] - c[1]);
@@ -330,6 +417,25 @@ export class Viewport {
     // coordenadas locais do plano, com snap de 1 mm
     const v = hit.clone().sub(s.basis.origin);
     const p: [number, number] = [Math.round(v.dot(s.basis.x)), Math.round(v.dot(s.basis.y))];
+
+    // modo seleção: escolhe a aresta reta mais próxima do clique
+    if (s.selectMode && s.kind === "profile") {
+      const exact: [number, number] = [v.dot(s.basis.x), v.dot(s.basis.y)];
+      const n = s.segments.length;
+      if (n < 2) return;
+      let best: { edge: number; dist: number } | null = null;
+      const edgeCount = n >= 3 ? n : n - 1; // contorno fechado a partir de 3 vértices
+      for (let i = 0; i < edgeCount; i++) {
+        if (s.segments[(i + 1) % n].via) continue; // arcos não recebem restrição
+        const d = distToSegment(exact, s.segments[i].to, s.segments[(i + 1) % n].to);
+        if (!best || d < best.dist) best = { edge: i, dist: d };
+      }
+      const threshold = Math.max(3, this.controls.getDistance() * 0.02);
+      s.selectedEdge = best && best.dist < threshold ? best.edge : null;
+      this.updateSketchPreview();
+      this.emitSketchProgress();
+      return;
+    }
 
     if (s.kind === "circle") {
       s.clicks.push(p);
@@ -396,6 +502,16 @@ export class Viewport {
       if (s.segments.length >= 3) path.push(s.segments[0].to); // fecha o contorno
       const pts3d = path.map((p) => this.sketchPointTo3D(p));
       s.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts3d), MAT_SKETCH));
+    }
+
+    // aresta selecionada em destaque
+    if (s.selectedEdge !== null) {
+      const n = s.segments.length;
+      const a = this.sketchPointTo3D(s.segments[s.selectedEdge].to);
+      const b = this.sketchPointTo3D(s.segments[(s.selectedEdge + 1) % n].to);
+      s.preview.add(
+        new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), MAT_EDGE_SELECTED),
+      );
     }
   }
 
