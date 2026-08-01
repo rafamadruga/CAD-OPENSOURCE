@@ -156,6 +156,16 @@ button:hover {
   line-height: 1.4;
 }
 
+.feature-actions {
+  display: flex;
+  gap: 4px;
+}
+
+button.active {
+  background: #2f6b43;
+  border-color: #4ade80;
+}
+
 .feature-error {
   color: #e08987;
   font-size: 12px;

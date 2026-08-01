@@ -58,6 +58,8 @@ async function start(): Promise<void> {
   let sketchPlane: SketchPlaneData = XY_PLANE;
   let sketchFaceRef: FaceRef | undefined;
   let sketchKind: "polygon" | "circle" = "polygon";
+  /** id do sketch em edição (null = desenhando um novo) */
+  let editingSketchId: number | null = null;
 
   const ui = new UI(app, {
     onModelChange: (features) => rebuild(features, ui),
@@ -70,6 +72,7 @@ async function start(): Promise<void> {
     getSelectedEdgeRefs: selectedEdgeRefs,
     onStartSketch: (kind) => {
       // desenha na face plana selecionada, ou no plano XY
+      editingSketchId = null;
       sketchKind = kind;
       sketchPlane = XY_PLANE;
       sketchFaceRef = undefined;
@@ -93,12 +96,36 @@ async function start(): Promise<void> {
     onFinishSketch: (action) => {
       const entity = viewport.finishSketch();
       ui.setSketchMode(false);
-      if (entity)
+      if (!entity) return;
+      if (action === "update" && editingSketchId !== null) {
+        ui.updateSketchEntity(editingSketchId, entity);
+        editingSketchId = null;
+      } else if (action !== "update") {
         ui.addSketchAndOp({ plane: sketchPlane, entity, faceRef: sketchFaceRef }, action);
+      }
     },
     onCancelSketch: () => {
       viewport.cancelSketch();
       ui.setSketchMode(false);
+      editingSketchId = null;
+    },
+    onToggleArc: () => viewport.toggleArcMode(),
+    onUndoPoint: () => viewport.undoSketchPoint(),
+    onEditSketch: (featureId) => {
+      const feature = ui.getFeature(featureId);
+      if (!feature?.sketch) return;
+      editingSketchId = featureId;
+      sketchKind = feature.sketch.entity.kind === "circle" ? "circle" : "polygon";
+      viewport.startSketch(
+        feature.sketch.plane,
+        feature.sketch.entity.kind === "circle" ? "circle" : "profile",
+        feature.sketch.entity,
+      );
+      ui.setSketchMode(
+        true,
+        "Editando o sketch: adicione pontos, use ⌫ Ponto para remover, e conclua.",
+        true,
+      );
     },
   });
 

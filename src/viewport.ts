@@ -10,7 +10,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import type { TessellatedBody, TopoGroup } from "./kernel";
-import type { SketchEntity, SketchPlaneData } from "./features";
+import { toProfile, type ProfileSegment, type SketchEntity, type SketchPlaneData } from "./features";
 
 export interface Selection {
   faceId: number | null;
@@ -19,12 +19,49 @@ export interface Selection {
 
 interface SketchSession {
   plane: SketchPlaneData;
-  kind: SketchEntity["kind"];
+  kind: "profile" | "circle";
   mathPlane: THREE.Plane;
   basis: { origin: THREE.Vector3; x: THREE.Vector3; y: THREE.Vector3 };
-  points: [number, number][];
+  /** perfil: segmentos (linhas/arcos); círculo: até 2 cliques em `clicks` */
+  segments: ProfileSegment[];
+  clicks: [number, number][];
+  /** próximo trecho será um arco: 1º clique = ponto de passagem, 2º = fim */
+  arcArmed: boolean;
+  pendingVia: [number, number] | null;
   preview: THREE.Group;
   saved: { position: THREE.Vector3; up: THREE.Vector3; target: THREE.Vector3 };
+}
+
+/** Amostra um arco por três pontos (coordenadas 2D locais do plano). */
+function sampleArc(
+  a: [number, number],
+  via: [number, number],
+  b: [number, number],
+): [number, number][] {
+  const d =
+    2 * (a[0] * (via[1] - b[1]) + via[0] * (b[1] - a[1]) + b[0] * (a[1] - via[1]));
+  if (Math.abs(d) < 1e-9) return [a, b]; // colineares → linha
+
+  const sq = (p: [number, number]) => p[0] * p[0] + p[1] * p[1];
+  const cx = (sq(a) * (via[1] - b[1]) + sq(via) * (b[1] - a[1]) + sq(b) * (a[1] - via[1])) / d;
+  const cy = (sq(a) * (b[0] - via[0]) + sq(via) * (a[0] - b[0]) + sq(b) * (via[0] - a[0])) / d;
+  const r = Math.hypot(a[0] - cx, a[1] - cy);
+
+  const angle = (p: [number, number]) => Math.atan2(p[1] - cy, p[0] - cx);
+  const ccwFrom = (from: number, to: number) =>
+    (((to - from) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const a0 = angle(a);
+  const sweepCCW = ccwFrom(a0, angle(b));
+  // o arco deve passar pelo ponto de via — escolhe o sentido certo
+  const sweep = ccwFrom(a0, angle(via)) <= sweepCCW ? sweepCCW : sweepCCW - 2 * Math.PI;
+
+  const steps = 24;
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = a0 + (sweep * i) / steps;
+    pts.push([cx + r * Math.cos(t), cy + r * Math.sin(t)]);
+  }
+  return pts;
 }
 
 const MAT_BODY = new THREE.MeshStandardMaterial({
@@ -166,9 +203,14 @@ export class Viewport {
 
   /**
    * Entra no modo sketch: cliques passam a criar pontos no plano dado,
-   * e a câmera se posiciona olhando o plano de frente.
+   * e a câmera se posiciona olhando o plano de frente. `initial` carrega
+   * uma entidade existente para edição.
    */
-  startSketch(plane: SketchPlaneData, kind: SketchEntity["kind"]): void {
+  startSketch(
+    plane: SketchPlaneData,
+    kind: SketchEntity["kind"],
+    initial?: SketchEntity,
+  ): void {
     this.cancelSketch();
     this.clearSelection();
 
@@ -180,12 +222,28 @@ export class Viewport {
     const preview = new THREE.Group();
     this.scene.add(preview);
 
+    let segments: ProfileSegment[] = [];
+    let clicks: [number, number][] = [];
+    if (initial) {
+      const entity = toProfile(initial);
+      if (entity.kind === "profile") segments = structuredClone(entity.segments);
+      else if (entity.kind === "circle") {
+        clicks = [
+          entity.center,
+          [entity.center[0] + entity.radius, entity.center[1]],
+        ];
+      }
+    }
+
     this.sketch = {
       plane,
-      kind,
+      kind: kind === "circle" ? "circle" : "profile",
       mathPlane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin),
       basis: { origin, x, y },
-      points: [],
+      segments,
+      clicks,
+      arcArmed: false,
+      pendingVia: null,
       preview,
       saved: {
         position: this.camera.position.clone(),
@@ -199,7 +257,35 @@ export class Viewport {
     this.camera.up.copy(y);
     this.camera.position.copy(origin).addScaledVector(normal, Math.max(dist, 120));
     this.controls.target.copy(origin);
-    this.onSketchProgress(0);
+    this.updateSketchPreview();
+    this.emitSketchProgress();
+  }
+
+  /** Arma/desarma o modo arco para o próximo trecho do perfil. */
+  toggleArcMode(): boolean {
+    const s = this.sketch;
+    if (!s || s.kind !== "profile" || s.segments.length === 0) return false;
+    s.arcArmed = !s.arcArmed;
+    if (!s.arcArmed) s.pendingVia = null;
+    this.updateSketchPreview();
+    return s.arcArmed;
+  }
+
+  /** Remove o último ponto clicado. */
+  undoSketchPoint(): void {
+    const s = this.sketch;
+    if (!s) return;
+    if (s.pendingVia) s.pendingVia = null;
+    else if (s.kind === "profile") s.segments.pop();
+    else s.clicks.pop();
+    this.updateSketchPreview();
+    this.emitSketchProgress();
+  }
+
+  private emitSketchProgress(): void {
+    const s = this.sketch;
+    if (!s) return;
+    this.onSketchProgress(s.kind === "profile" ? s.segments.length : s.clicks.length);
   }
 
   cancelSketch(): void {
@@ -217,10 +303,10 @@ export class Viewport {
     if (!s) return null;
 
     let entity: SketchEntity | null = null;
-    if (s.kind === "polygon" && s.points.length >= 3) {
-      entity = { kind: "polygon", points: s.points };
-    } else if (s.kind === "circle" && s.points.length >= 2) {
-      const [c, r] = s.points;
+    if (s.kind === "profile" && s.segments.length >= 3) {
+      entity = { kind: "profile", segments: s.segments };
+    } else if (s.kind === "circle" && s.clicks.length >= 2) {
+      const [c, r] = s.clicks;
       const radius = Math.hypot(r[0] - c[0], r[1] - c[1]);
       if (radius > 0) entity = { kind: "circle", center: c, radius };
     }
@@ -230,7 +316,7 @@ export class Viewport {
 
   private addSketchPoint(event: PointerEvent): void {
     const s = this.sketch!;
-    if (s.kind === "circle" && s.points.length >= 2) return;
+    if (s.kind === "circle" && s.clicks.length >= 2) return;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     const pointer = new THREE.Vector2(
@@ -243,11 +329,21 @@ export class Viewport {
 
     // coordenadas locais do plano, com snap de 1 mm
     const v = hit.clone().sub(s.basis.origin);
-    const u = Math.round(v.dot(s.basis.x));
-    const w = Math.round(v.dot(s.basis.y));
-    s.points.push([u, w]);
+    const p: [number, number] = [Math.round(v.dot(s.basis.x)), Math.round(v.dot(s.basis.y))];
+
+    if (s.kind === "circle") {
+      s.clicks.push(p);
+    } else if (s.arcArmed && !s.pendingVia) {
+      s.pendingVia = p; // 1º clique do arco: ponto de passagem
+    } else if (s.arcArmed && s.pendingVia) {
+      s.segments.push({ to: p, via: s.pendingVia }); // 2º clique: fim do arco
+      s.pendingVia = null;
+      s.arcArmed = false;
+    } else {
+      s.segments.push({ to: p });
+    }
     this.updateSketchPreview();
-    this.onSketchProgress(s.points.length);
+    this.emitSketchProgress();
   }
 
   private sketchPointTo3D(p: [number, number]): THREE.Vector3 {
@@ -259,25 +355,47 @@ export class Viewport {
     const s = this.sketch!;
     s.preview.clear();
 
-    const pts3d = s.points.map((p) => this.sketchPointTo3D(p));
-    s.preview.add(
-      new THREE.Points(new THREE.BufferGeometry().setFromPoints(pts3d), MAT_SKETCH_POINTS),
-    );
-
-    if (s.kind === "polygon" && pts3d.length >= 2) {
-      const loop = pts3d.length >= 3 ? [...pts3d, pts3d[0]] : pts3d;
-      s.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(loop), MAT_SKETCH));
-    } else if (s.kind === "circle" && s.points.length === 2) {
-      const [c, r] = s.points;
-      const radius = Math.hypot(r[0] - c[0], r[1] - c[1]);
-      const circle: THREE.Vector3[] = [];
-      for (let i = 0; i <= 64; i++) {
-        const a = (i / 64) * Math.PI * 2;
-        circle.push(
-          this.sketchPointTo3D([c[0] + radius * Math.cos(a), c[1] + radius * Math.sin(a)]),
+    if (s.kind === "circle") {
+      const pts3d = s.clicks.map((p) => this.sketchPointTo3D(p));
+      s.preview.add(
+        new THREE.Points(new THREE.BufferGeometry().setFromPoints(pts3d), MAT_SKETCH_POINTS),
+      );
+      if (s.clicks.length === 2) {
+        const [c, r] = s.clicks;
+        const radius = Math.hypot(r[0] - c[0], r[1] - c[1]);
+        const circle: THREE.Vector3[] = [];
+        for (let i = 0; i <= 64; i++) {
+          const a = (i / 64) * Math.PI * 2;
+          circle.push(
+            this.sketchPointTo3D([c[0] + radius * Math.cos(a), c[1] + radius * Math.sin(a)]),
+          );
+        }
+        s.preview.add(
+          new THREE.Line(new THREE.BufferGeometry().setFromPoints(circle), MAT_SKETCH),
         );
       }
-      s.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(circle), MAT_SKETCH));
+      return;
+    }
+
+    // perfil: marcadores nos vértices (e no via pendente do arco)
+    const markers = s.segments.map((seg) => this.sketchPointTo3D(seg.to));
+    if (s.pendingVia) markers.push(this.sketchPointTo3D(s.pendingVia));
+    s.preview.add(
+      new THREE.Points(new THREE.BufferGeometry().setFromPoints(markers), MAT_SKETCH_POINTS),
+    );
+
+    if (s.segments.length >= 2) {
+      // caminho 2D amostrado (arcos viram sequências de pontos)
+      const path: [number, number][] = [s.segments[0].to];
+      for (let i = 1; i < s.segments.length; i++) {
+        const from = s.segments[i - 1].to;
+        const seg = s.segments[i];
+        if (seg.via) path.push(...sampleArc(from, seg.via, seg.to).slice(1));
+        else path.push(seg.to);
+      }
+      if (s.segments.length >= 3) path.push(s.segments[0].to); // fecha o contorno
+      const pts3d = path.map((p) => this.sketchPointTo3D(p));
+      s.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts3d), MAT_SKETCH));
     }
   }
 

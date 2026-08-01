@@ -15,8 +15,8 @@ import {
   type SketchEntity,
 } from "./features";
 
-/** O que fazer com o sketch concluído. */
-export type SketchAction = "pad" | "pocket" | "revolve";
+/** O que fazer com o sketch concluído ("update" = edição de sketch existente). */
+export type SketchAction = "pad" | "pocket" | "revolve" | "update";
 
 const FILE_VERSION = 1;
 
@@ -26,9 +26,13 @@ interface UICallbacks {
   onExportSTEP: () => void;
   /** arestas atualmente selecionadas no viewport (para fillet/chamfer seletivo) */
   getSelectedEdgeRefs: () => EdgeRef[];
-  onStartSketch: (kind: SketchEntity["kind"]) => void;
+  onStartSketch: (kind: "polygon" | "circle") => void;
   onFinishSketch: (action: SketchAction) => void;
   onCancelSketch: () => void;
+  /** arma o modo arco para o próximo trecho; retorna se ficou armado */
+  onToggleArc: () => boolean;
+  onUndoPoint: () => void;
+  onEditSketch: (featureId: number) => void;
 }
 
 export class UI {
@@ -66,9 +70,13 @@ export class UI {
           <span class="brand sketch-brand">✏ Modo Sketch</span>
           <span id="sketch-hint"></span>
           <span class="spacer"></span>
+          <button id="sketch-arc" title="O próximo trecho será um arco: clique o ponto de passagem e depois o fim">◠ Arco</button>
+          <button id="sketch-undo-point" title="Remove o último ponto clicado">⌫ Ponto</button>
+          <span class="divider"></span>
           <button id="sketch-pad" disabled>Extrudar</button>
           <button id="sketch-pocket" disabled>Cortar (pocket)</button>
           <button id="sketch-revolve" disabled title="Gira o perfil em torno do eixo vertical da vista de sketch">Revolucionar</button>
+          <button id="sketch-done" class="hidden" disabled>Concluir edição</button>
           <button id="sketch-cancel">Cancelar</button>
         </div>
       </header>
@@ -102,7 +110,7 @@ export class UI {
 
     root.querySelectorAll<HTMLButtonElement>("[data-sketch]").forEach((btn) =>
       btn.addEventListener("click", () =>
-        callbacks.onStartSketch(btn.dataset.sketch as SketchEntity["kind"]),
+        callbacks.onStartSketch(btn.dataset.sketch as "polygon" | "circle"),
       ),
     );
     root.querySelector("#sketch-pad")!.addEventListener("click", () =>
@@ -114,7 +122,18 @@ export class UI {
     root.querySelector("#sketch-revolve")!.addEventListener("click", () =>
       callbacks.onFinishSketch("revolve"),
     );
+    root.querySelector("#sketch-done")!.addEventListener("click", () =>
+      callbacks.onFinishSketch("update"),
+    );
     root.querySelector("#sketch-cancel")!.addEventListener("click", callbacks.onCancelSketch);
+    const arcBtn = root.querySelector<HTMLButtonElement>("#sketch-arc")!;
+    arcBtn.addEventListener("click", () =>
+      arcBtn.classList.toggle("active", callbacks.onToggleArc()),
+    );
+    root.querySelector("#sketch-undo-point")!.addEventListener("click", () => {
+      callbacks.onUndoPoint();
+      arcBtn.classList.remove("active");
+    });
 
     root.querySelector("#undo")!.addEventListener("click", () => this.undo());
     root.querySelector("#redo")!.addEventListener("click", () => this.redo());
@@ -197,10 +216,16 @@ export class UI {
   }
 
   /** Alterna a barra para o modo sketch (ou de volta). */
-  setSketchMode(active: boolean, hint = ""): void {
+  setSketchMode(active: boolean, hint = "", editing = false): void {
     document.querySelector("#toolbar-main")!.classList.toggle("hidden", active);
     document.querySelector("#toolbar-sketch")!.classList.toggle("hidden", !active);
     document.querySelector("#sketch-hint")!.textContent = hint;
+    // editando um sketch existente: a operação já existe, só "Concluir"
+    document.querySelector("#sketch-pad")!.classList.toggle("hidden", editing);
+    document.querySelector("#sketch-pocket")!.classList.toggle("hidden", editing);
+    document.querySelector("#sketch-revolve")!.classList.toggle("hidden", editing);
+    document.querySelector("#sketch-done")!.classList.toggle("hidden", !editing);
+    document.querySelector("#sketch-arc")!.classList.remove("active");
     if (active) this.setSketchReady(false);
   }
 
@@ -212,6 +237,21 @@ export class UI {
     document.querySelector<HTMLButtonElement>("#sketch-pad")!.disabled = !ready;
     document.querySelector<HTMLButtonElement>("#sketch-pocket")!.disabled = !ready;
     document.querySelector<HTMLButtonElement>("#sketch-revolve")!.disabled = !ready;
+    document.querySelector<HTMLButtonElement>("#sketch-done")!.disabled = !ready;
+  }
+
+  /** Substitui a geometria de um sketch existente (edição). */
+  updateSketchEntity(featureId: number, entity: SketchEntity): void {
+    const feature = this.features.find((f) => f.id === featureId);
+    if (!feature?.sketch) return;
+    this.snapshot();
+    feature.sketch = { ...feature.sketch, entity };
+    this.renderTree();
+    this.callbacks.onModelChange(this.features);
+  }
+
+  getFeature(id: number): Feature | undefined {
+    return this.features.find((f) => f.id === id);
   }
 
   /** Adiciona o par Sketch + operação (pad/pocket/revolução) ao histórico. */
@@ -271,6 +311,35 @@ export class UI {
     this.callbacks.onModelChange(this.features);
   }
 
+  /** Linha de parâmetro numérico editável, com snapshot e rebuild. */
+  private paramRow(
+    label: string,
+    value: number,
+    min: number | undefined,
+    apply: (value: number) => void,
+  ): HTMLElement {
+    const row = document.createElement("label");
+    row.className = "param";
+    row.textContent = label;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.step = "1";
+    if (min !== undefined) input.min = String(min);
+    input.value = String(value);
+    input.addEventListener("change", () => {
+      const v = Number(input.value);
+      if (Number.isFinite(v)) {
+        this.snapshot();
+        const clamped = min !== undefined ? Math.max(min, v) : v;
+        apply(clamped);
+        input.value = String(clamped);
+        this.callbacks.onModelChange(this.features);
+      }
+    });
+    row.appendChild(input);
+    return row;
+  }
+
   private renderTree(): void {
     this.treeEl.innerHTML = "";
     if (this.features.length === 0) {
@@ -286,6 +355,19 @@ export class UI {
 
       const summary = document.createElement("summary");
       summary.innerHTML = `<span>${f.name}</span>`;
+      const actions = document.createElement("span");
+      actions.className = "feature-actions";
+      if (f.type === "sketch") {
+        const edit = document.createElement("button");
+        edit.textContent = "✎";
+        edit.title = "Editar o desenho do sketch";
+        edit.className = "delete";
+        edit.addEventListener("click", (e) => {
+          e.preventDefault();
+          this.callbacks.onEditSketch(f.id);
+        });
+        actions.appendChild(edit);
+      }
       const del = document.createElement("button");
       del.textContent = "×";
       del.title = "Remover feature";
@@ -294,7 +376,8 @@ export class UI {
         e.preventDefault();
         this.removeFeature(f.id);
       });
-      summary.appendChild(del);
+      actions.appendChild(del);
+      summary.appendChild(actions);
       item.appendChild(summary);
 
       if (f.error) {
@@ -305,25 +388,25 @@ export class UI {
       }
 
       for (const spec of FEATURE_SPECS[f.type]) {
-        const row = document.createElement("label");
-        row.className = "param";
-        row.textContent = spec.label;
-        const input = document.createElement("input");
-        input.type = "number";
-        input.step = "1";
-        if (spec.min !== undefined) input.min = String(spec.min);
-        input.value = String(f.params[spec.key]);
-        input.addEventListener("change", () => {
-          const value = Number(input.value);
-          if (Number.isFinite(value)) {
-            this.snapshot();
-            f.params[spec.key] = spec.min !== undefined ? Math.max(spec.min, value) : value;
-            input.value = String(f.params[spec.key]);
-            this.callbacks.onModelChange(this.features);
-          }
-        });
-        row.appendChild(input);
-        item.appendChild(row);
+        item.appendChild(
+          this.paramRow(spec.label, f.params[spec.key], spec.min, (value) => {
+            f.params[spec.key] = value;
+          }),
+        );
+      }
+
+      // círculo de sketch: centro e raio editáveis numericamente
+      if (f.type === "sketch" && f.sketch?.entity.kind === "circle") {
+        const circle = f.sketch.entity;
+        item.appendChild(
+          this.paramRow("Centro X", circle.center[0], undefined, (v) => (circle.center[0] = v)),
+        );
+        item.appendChild(
+          this.paramRow("Centro Y", circle.center[1], undefined, (v) => (circle.center[1] = v)),
+        );
+        item.appendChild(
+          this.paramRow("Raio", circle.radius, 0.1, (v) => (circle.radius = v)),
+        );
       }
 
       this.treeEl.appendChild(item);

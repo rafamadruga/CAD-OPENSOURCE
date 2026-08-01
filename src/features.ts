@@ -24,10 +24,26 @@ export interface SketchPlaneData {
   normal: [number, number, number];
 }
 
+/**
+ * Trecho de um perfil 2D. O primeiro segmento define o ponto inicial
+ * (via ignorado); nos demais, `via` presente = arco por três pontos.
+ */
+export interface ProfileSegment {
+  to: [number, number];
+  via?: [number, number];
+}
+
 /** Geometria 2D desenhada, em coordenadas locais do plano. */
 export type SketchEntity =
-  | { kind: "polygon"; points: [number, number][] }
+  | { kind: "polygon"; points: [number, number][] } // legado (arquivos antigos)
+  | { kind: "profile"; segments: ProfileSegment[] } // linhas + arcos
   | { kind: "circle"; center: [number, number]; radius: number };
+
+/** Converte a entidade legada em perfil (para edição uniforme). */
+export function toProfile(entity: SketchEntity): SketchEntity {
+  if (entity.kind !== "polygon") return entity;
+  return { kind: "profile", segments: entity.points.map((p) => ({ to: p })) };
+}
 
 /**
  * Referência estável a uma face do B-rep (mesma estratégia do EdgeRef):

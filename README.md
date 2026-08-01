@@ -52,7 +52,8 @@ mudança de parâmetro → **reavaliação do histórico de features** (chamando
 - [x] Sketch 2D (polígono/círculo) → pad/pocket, inclusive sobre faces
 - [x] Chamfer seletivo e revolução (lathe)
 - [x] Undo/redo e salvar/abrir documento nativo
-- [ ] Sketch com linhas + arcos e edição de sketch existente
+- [x] Sketch com linhas + arcos (três pontos), desfazer ponto e edição de sketch existente
+- [x] Edição numérica de círculos de sketch (centro/raio)
 - [ ] Solver de restrições geométricas no sketch
 - [ ] Sweep e loft
 - [ ] Import STEP e desenho técnico 2D

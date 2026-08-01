@@ -57,13 +57,19 @@ function buildPrimitive(f: Feature): Shape3D {
 /** Constrói a face 2D do sketch posicionada no seu plano 3D. */
 function buildSketch(s: SketchData): Sketch {
   let drawing;
-  if (s.entity.kind === "polygon") {
-    const [first, ...rest] = s.entity.points;
-    let pen = draw(first);
-    for (const p of rest) pen = pen.lineTo(p);
-    drawing = pen.close();
-  } else {
+  if (s.entity.kind === "circle") {
     drawing = drawCircle(s.entity.radius).translate(s.entity.center);
+  } else {
+    const segments =
+      s.entity.kind === "profile"
+        ? s.entity.segments
+        : s.entity.points.map((p) => ({ to: p, via: undefined }));
+    const [first, ...rest] = segments;
+    let pen = draw(first.to);
+    for (const seg of rest) {
+      pen = seg.via ? pen.threePointsArcTo(seg.to, seg.via) : pen.lineTo(seg.to);
+    }
+    drawing = pen.close();
   }
   const plane = new Plane(s.plane.origin, s.plane.xDir, s.plane.normal);
   return drawing.sketchOnPlane(plane) as Sketch;
