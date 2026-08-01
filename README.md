@@ -16,6 +16,7 @@ CAD paramétrico de modelagem 3D que roda **no navegador** — gratuito e open-s
 - **Solver de restrições geométricas**: no modo sketch, selecione arestas (✥, até duas) e aplique Horizontal, Vertical, Cota (comprimento exato), Fixar, **Paralela, Perpendicular e Igual**. O solver (Gauss-Newton amortecido com jacobiano numérico, em `src/solver.ts`) move os vértices para satisfazer todas as restrições simultaneamente, mostra os graus de liberdade restantes e **rejeita restrições conflitantes**. As restrições ficam salvas no sketch, são reaplicadas na edição e aparecem **anotadas no desenho** (cotas e símbolos H, V, ∥, ⊥, =, ⚓)
 - **Revolução (lathe)**: gire o perfil do sketch em torno do eixo vertical da vista de sketch, com ângulo paramétrico
 - **Chamfer seletivo**: mesma mecânica do fillet, nas arestas clicadas
+- **Loft**: transição suave entre 2+ sketches avulsos ("Só o sketch") em planos com **offset paramétrico** — funis, vasos, carenagens
 - **Casca (shell)**: oca o sólido com espessura paramétrica, removendo a face plana selecionada — gabinetes, caixas, vasos. A referência de face sobrevive a reconstruções
 - **Import STEP**: traga peças de qualquer CAD para o histórico como uma feature paramétrica (posição editável, participa de booleanas); o conteúdo STEP é serializado dentro do documento nativo
 - **Undo/Redo** (Ctrl+Z / Ctrl+Shift+Z) com snapshots do histórico
@@ -63,9 +64,10 @@ mudança de parâmetro → **reavaliação do histórico de features** (chamando
 - [x] Casca (shell) com face de abertura selecionável
 - [x] Import STEP como feature paramétrica
 - [x] Desenho técnico 2D (projeções ortográficas com linhas ocultas, em SVG)
+- [x] Loft entre sketches com offset de plano paramétrico
 - [ ] Cotas detalhadas no desenho 2D (furos, posições)
 - [ ] Restrições de tangência e ângulo (envolvem arcos)
-- [ ] Sweep e loft
+- [ ] Sweep ao longo de um caminho
 - [ ] Import STEP
 - [ ] Desenho técnico 2D (projeções)
 

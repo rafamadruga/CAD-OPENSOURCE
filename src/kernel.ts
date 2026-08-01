@@ -126,11 +126,11 @@ export function evaluate(features: Feature[]): EvaluationResult {
   let body: Shape3D | null = null;
 
   /**
-   * Resolve o sketch consumido por um pad/revolução, re-ancorando o
-   * plano na face de referência do corpo atual quando houver uma.
+   * Resolve um sketch pelo id: re-ancora o plano na face de referência
+   * do corpo atual (quando houver) e aplica o offset ao longo da normal.
    */
-  const resolveSketch = (f: Feature): SketchData => {
-    const sketchFeature = features.find((x) => x.id === f.sketchId && x.type === "sketch");
+  const resolveSketchById = (id: number | undefined): SketchData => {
+    const sketchFeature = features.find((x) => x.id === id && x.type === "sketch");
     if (!sketchFeature?.sketch) throw new Error("Sketch de referência não encontrado");
     let sketchData = sketchFeature.sketch;
     if (sketchData.faceRef && body) {
@@ -142,8 +142,24 @@ export function evaluate(features: Feature[]): EvaluationResult {
           "Face de referência não reencontrada — usando o plano original",
         );
     }
+    const offset = sketchFeature.params.offset || 0;
+    if (offset) {
+      const { origin, normal } = sketchData.plane;
+      sketchData = {
+        ...sketchData,
+        plane: {
+          ...sketchData.plane,
+          origin: [
+            origin[0] + normal[0] * offset,
+            origin[1] + normal[1] * offset,
+            origin[2] + normal[2] * offset,
+          ],
+        },
+      };
+    }
     return sketchData;
   };
+  const resolveSketch = (f: Feature): SketchData => resolveSketchById(f.sketchId);
 
   const combine = (f: Feature, solid: Shape3D): Shape3D => {
     if (!body) {
@@ -179,6 +195,15 @@ export function evaluate(features: Feature[]): EvaluationResult {
           origin: s.plane.origin,
           angle: f.params.angle,
         }) as Shape3D;
+        body = combine(f, solid);
+        continue;
+      }
+
+      if (f.type === "loft") {
+        const ids = f.sketchIds ?? [];
+        if (ids.length < 2) throw new Error("Loft precisa de pelo menos 2 sketches");
+        const [first, ...rest] = ids.map((id) => buildSketch(resolveSketchById(id)));
+        const solid = first.loftWith(rest as (typeof first)[], { ruled: false });
         body = combine(f, solid);
         continue;
       }

@@ -16,8 +16,11 @@ import {
   type SketchEntity,
 } from "./features";
 
-/** O que fazer com o sketch concluído ("update" = edição de sketch existente). */
-export type SketchAction = "pad" | "pocket" | "revolve" | "update";
+/**
+ * O que fazer com o sketch concluído ("update" = edição de sketch
+ * existente; "keep" = guardar só o sketch, sem operação — ex.: loft).
+ */
+export type SketchAction = "pad" | "pocket" | "revolve" | "update" | "keep";
 
 const FILE_VERSION = 1;
 
@@ -73,6 +76,7 @@ export class UI {
           <button data-add="fillet">Fillet</button>
           <button data-add="chamfer">Chamfer</button>
           <button data-add="shell" title="Oca o sólido removendo a face plana selecionada">Casca</button>
+          <button id="loft" title="Transição suave entre os sketches avulsos do histórico (mín. 2)">Loft</button>
           <span class="divider"></span>
           <button id="import-step" title="Importa uma peça STEP para o histórico">Importar STEP</button>
           <input id="import-step-file" type="file" accept=".step,.stp" class="hidden" />
@@ -105,6 +109,7 @@ export class UI {
           <button id="sketch-pad" disabled>Extrudar</button>
           <button id="sketch-pocket" disabled>Cortar (pocket)</button>
           <button id="sketch-revolve" disabled title="Gira o perfil em torno do eixo vertical da vista de sketch">Revolucionar</button>
+          <button id="sketch-keep" disabled title="Guarda só o sketch, sem operação — use dois ou mais para o Loft">Só o sketch</button>
           <button id="sketch-done" class="hidden" disabled>Concluir edição</button>
           <button id="sketch-cancel">Cancelar</button>
         </div>
@@ -152,9 +157,13 @@ export class UI {
     root.querySelector("#sketch-revolve")!.addEventListener("click", () =>
       callbacks.onFinishSketch("revolve"),
     );
+    root.querySelector("#sketch-keep")!.addEventListener("click", () =>
+      callbacks.onFinishSketch("keep"),
+    );
     root.querySelector("#sketch-done")!.addEventListener("click", () =>
       callbacks.onFinishSketch("update"),
     );
+    root.querySelector("#loft")!.addEventListener("click", () => this.addLoft());
     root.querySelector("#sketch-cancel")!.addEventListener("click", callbacks.onCancelSketch);
     const arcBtn = root.querySelector<HTMLButtonElement>("#sketch-arc")!;
     arcBtn.addEventListener("click", () =>
@@ -275,6 +284,7 @@ export class UI {
     document.querySelector("#sketch-pad")!.classList.toggle("hidden", editing);
     document.querySelector("#sketch-pocket")!.classList.toggle("hidden", editing);
     document.querySelector("#sketch-revolve")!.classList.toggle("hidden", editing);
+    document.querySelector("#sketch-keep")!.classList.toggle("hidden", editing);
     document.querySelector("#sketch-done")!.classList.toggle("hidden", !editing);
     document.querySelector("#sketch-arc")!.classList.remove("active");
     document.querySelector("#sketch-select")!.classList.remove("active");
@@ -286,10 +296,9 @@ export class UI {
   }
 
   setSketchReady(ready: boolean): void {
-    document.querySelector<HTMLButtonElement>("#sketch-pad")!.disabled = !ready;
-    document.querySelector<HTMLButtonElement>("#sketch-pocket")!.disabled = !ready;
-    document.querySelector<HTMLButtonElement>("#sketch-revolve")!.disabled = !ready;
-    document.querySelector<HTMLButtonElement>("#sketch-done")!.disabled = !ready;
+    for (const id of ["sketch-pad", "sketch-pocket", "sketch-revolve", "sketch-keep", "sketch-done"]) {
+      document.querySelector<HTMLButtonElement>(`#${id}`)!.disabled = !ready;
+    }
   }
 
   /** Substitui a geometria de um sketch existente (edição). */
@@ -306,17 +315,43 @@ export class UI {
     return this.features.find((f) => f.id === id);
   }
 
-  /** Adiciona o par Sketch + operação (pad/pocket/revolução) ao histórico. */
+  /** Adiciona o Sketch + operação (pad/pocket/revolução/nenhuma) ao histórico. */
   addSketchAndOp(sketch: SketchData, action: SketchAction): void {
     this.snapshot();
     const sketchFeature = createFeature("sketch", "add", { sketch });
-    const op =
-      action === "revolve"
-        ? createFeature("revolve", "add", { sketchId: sketchFeature.id })
-        : createFeature("pad", action === "pocket" ? "cut" : "add", {
-            sketchId: sketchFeature.id,
-          });
-    this.features.push(sketchFeature, op);
+    this.features.push(sketchFeature);
+    if (action === "revolve") {
+      this.features.push(createFeature("revolve", "add", { sketchId: sketchFeature.id }));
+    } else if (action === "pad" || action === "pocket") {
+      this.features.push(
+        createFeature("pad", action === "pocket" ? "cut" : "add", {
+          sketchId: sketchFeature.id,
+        }),
+      );
+    }
+    this.renderTree();
+    this.callbacks.onModelChange(this.features);
+  }
+
+  /** Cria um loft com todos os sketches avulsos (não consumidos) do histórico. */
+  private addLoft(): void {
+    const consumed = new Set<number>();
+    for (const f of this.features) {
+      if (f.sketchId !== undefined) consumed.add(f.sketchId);
+      for (const id of f.sketchIds ?? []) consumed.add(id);
+    }
+    const orphans = this.features
+      .filter((f) => f.type === "sketch" && !consumed.has(f.id))
+      .map((f) => f.id);
+    if (orphans.length < 2) {
+      this.setStatus(
+        'Loft: crie 2+ sketches avulsos ("Só o sketch", com offsets diferentes) primeiro.',
+        true,
+      );
+      return;
+    }
+    this.snapshot();
+    this.features.push(createFeature("loft", "add", { sketchIds: orphans }));
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }
@@ -366,8 +401,10 @@ export class UI {
 
   private removeFeature(id: number): void {
     this.snapshot();
-    // remover um sketch remove também os pads que dependem dele
-    this.features = this.features.filter((f) => f.id !== id && f.sketchId !== id);
+    // remover um sketch remove também os pads/lofts que dependem dele
+    this.features = this.features.filter(
+      (f) => f.id !== id && f.sketchId !== id && !f.sketchIds?.includes(id),
+    );
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }

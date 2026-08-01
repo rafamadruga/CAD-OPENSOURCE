@@ -17,7 +17,8 @@ export type FeatureType =
   | "pad"
   | "revolve"
   | "shell"
-  | "import";
+  | "import"
+  | "loft";
 
 /** Plano de sketch no espaço: origem + base ortonormal. */
 export interface SketchPlaneData {
@@ -102,6 +103,8 @@ export interface Feature {
   sketch?: SketchData;
   /** Pad: id da feature de sketch que ele extruda. */
   sketchId?: number;
+  /** Loft: ids dos sketches-perfil, na ordem da transição. */
+  sketchIds?: number[];
   /** Shell: face a remover ao ocar o sólido. */
   faceRef?: FaceRef;
   /** Import: conteúdo do arquivo STEP (texto), serializado no documento. */
@@ -142,10 +145,11 @@ export const FEATURE_SPECS: Record<FeatureType, ParamSpec[]> = {
   ],
   fillet: [{ key: "radius", label: "Raio", min: 0.01, default: 2 }],
   chamfer: [{ key: "radius", label: "Distância", min: 0.01, default: 2 }],
-  sketch: [],
+  sketch: [{ key: "offset", label: "Offset do plano", default: 0 }],
   pad: [{ key: "distance", label: "Distância", min: 0.1, default: 20 }],
   revolve: [{ key: "angle", label: "Ângulo (°)", min: 1, default: 360 }],
   shell: [{ key: "thickness", label: "Espessura", min: 0.1, default: 2 }],
+  loft: [],
   import: [
     { key: "x", label: "Posição X", default: 0 },
     { key: "y", label: "Posição Y", default: 0 },
@@ -164,6 +168,7 @@ const TYPE_LABELS: Record<FeatureType, string> = {
   revolve: "Revolução",
   shell: "Casca",
   import: "Import STEP",
+  loft: "Loft",
 };
 
 /** Features que operam sobre arestas selecionadas. */
@@ -180,6 +185,7 @@ export function createFeature(
     edgeRefs?: EdgeRef[];
     sketch?: SketchData;
     sketchId?: number;
+    sketchIds?: number[];
     faceRef?: FaceRef;
     stepData?: string;
   },
@@ -197,6 +203,9 @@ export function createFeature(
   }
 
   let name = `${prefix}${label} ${id}`;
+  if (type === "loft" && extra?.sketchIds) {
+    name += ` (${extra.sketchIds.length} perfis)`;
+  }
   if (isEdgeFeature(type)) {
     name += extra?.edgeRefs?.length
       ? ` (${extra.edgeRefs.length} aresta${extra.edgeRefs.length > 1 ? "s" : ""})`
