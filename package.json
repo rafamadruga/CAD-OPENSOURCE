@@ -1,0 +1,22 @@
+{
+  "name": "cad-opensource",
+  "version": "0.1.0",
+  "description": "CAD paramétrico open-source no navegador — OpenCASCADE (WASM) + Three.js + TypeScript",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "replicad": "^0.23.1",
+    "replicad-opencascadejs": "^0.23.0",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.185.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.0"
+  }
+}
