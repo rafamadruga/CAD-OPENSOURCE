@@ -16,6 +16,7 @@ import {
   XY_PLANE,
   type TessellatedBody,
 } from "./kernel";
+import { technicalDrawing } from "./drawing";
 import { UI, downloadBlob } from "./ui";
 import { Viewport, type Selection } from "./viewport";
 import "./style.css";
@@ -70,6 +71,11 @@ async function start(): Promise<void> {
     },
     onExportSTEP: () => {
       if (currentBody) downloadBlob(exportSTEP(currentBody), "modelo.step");
+    },
+    onExportDrawing: () => {
+      if (!currentBody) return;
+      const svg = technicalDrawing(currentBody);
+      downloadBlob(new Blob([svg], { type: "image/svg+xml" }), "modelo-desenho.svg");
     },
     getSelectedEdgeRefs: selectedEdgeRefs,
     getSelectedFaceRef: () => {

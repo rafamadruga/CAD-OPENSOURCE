@@ -25,6 +25,7 @@ interface UICallbacks {
   onModelChange: (features: Feature[]) => void;
   onExportSTL: () => void;
   onExportSTEP: () => void;
+  onExportDrawing: () => void;
   /** arestas atualmente selecionadas no viewport (para fillet/chamfer seletivo) */
   getSelectedEdgeRefs: () => EdgeRef[];
   /** face plana selecionada (para a abertura da casca), ou null */
@@ -81,6 +82,7 @@ export class UI {
           <button id="open-doc" title="Abrir documento salvo">Abrir</button>
           <input id="open-file" type="file" accept=".json,application/json" class="hidden" />
           <span class="spacer"></span>
+          <button id="export-drawing" title="Folha de desenho técnico com projeções ortográficas (SVG)">Desenho 2D</button>
           <button id="export-stl" title="Malha para impressão 3D">Exportar STL</button>
           <button id="export-step" title="B-rep exato, abre em qualquer CAD">Exportar STEP</button>
         </div>
@@ -134,6 +136,7 @@ export class UI {
     );
     root.querySelector("#export-stl")!.addEventListener("click", callbacks.onExportSTL);
     root.querySelector("#export-step")!.addEventListener("click", callbacks.onExportSTEP);
+    root.querySelector("#export-drawing")!.addEventListener("click", callbacks.onExportDrawing);
 
     root.querySelectorAll<HTMLButtonElement>("[data-sketch]").forEach((btn) =>
       btn.addEventListener("click", () =>
