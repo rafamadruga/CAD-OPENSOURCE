@@ -23,7 +23,7 @@ CAD paramétrico de modelagem 3D que roda **no navegador** — gratuito e open-s
 - **Salvar/Abrir documento nativo** (`.cad.json`): o histórico paramétrico completo é serializado — reabra e continue editando
 - **Viewport 3D**: sombreamento + arestas técnicas, órbita/zoom/pan, convenção Z-para-cima
 - **Exportação**: **STL** (impressão 3D) e **STEP** (B-rep exato, abre em qualquer CAD profissional)
-- **Desenho técnico 2D**: gera a folha SVG com as projeções ortográficas (frente, topo, lateral) direto do B-rep, com **linhas ocultas tracejadas**, escala uniforme entre vistas, dimensões gerais e legenda — pronta para imprimir
+- **Desenho técnico 2D**: gera a folha SVG com as projeções ortográficas (frente, topo, lateral) direto do B-rep, com **linhas ocultas tracejadas**, escala uniforme entre vistas, **linhas de cota com setas** em cada vista, **tabela de furos** (arestas circulares detectadas no B-rep e agrupadas por eixo) e legenda — pronta para imprimir
 
 ## Rodando
 
@@ -65,9 +65,10 @@ mudança de parâmetro → **reavaliação do histórico de features** (chamando
 - [x] Import STEP como feature paramétrica
 - [x] Desenho técnico 2D (projeções ortográficas com linhas ocultas, em SVG)
 - [x] Loft entre sketches com offset de plano paramétrico
-- [ ] Cotas detalhadas no desenho 2D (furos, posições)
+- [x] Cotas com setas nas vistas 2D + tabela de furos detectados
 - [ ] Restrições de tangência e ângulo (envolvem arcos)
 - [ ] Sweep ao longo de um caminho
+- [ ] Posições dos furos cotadas nas vistas
 - [ ] Import STEP
 - [ ] Desenho técnico 2D (projeções)
 
