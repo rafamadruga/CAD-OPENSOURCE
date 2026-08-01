@@ -10,10 +10,21 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import type { TessellatedBody, TopoGroup } from "./kernel";
+import type { SketchEntity, SketchPlaneData } from "./features";
 
 export interface Selection {
   faceId: number | null;
   edgeIds: number[];
+}
+
+interface SketchSession {
+  plane: SketchPlaneData;
+  kind: SketchEntity["kind"];
+  mathPlane: THREE.Plane;
+  basis: { origin: THREE.Vector3; x: THREE.Vector3; y: THREE.Vector3 };
+  points: [number, number][];
+  preview: THREE.Group;
+  saved: { position: THREE.Vector3; up: THREE.Vector3; target: THREE.Vector3 };
 }
 
 const MAT_BODY = new THREE.MeshStandardMaterial({
@@ -28,6 +39,13 @@ const MAT_BODY_SELECTED = MAT_BODY.clone();
 MAT_BODY_SELECTED.color.set(0xe8a33d);
 const MAT_EDGE = new THREE.LineBasicMaterial({ color: 0xdde3ec });
 const MAT_EDGE_SELECTED = new THREE.LineBasicMaterial({ color: 0xff8c1a, depthTest: false });
+const MAT_SKETCH = new THREE.LineBasicMaterial({ color: 0x4ade80, depthTest: false });
+const MAT_SKETCH_POINTS = new THREE.PointsMaterial({
+  color: 0x4ade80,
+  size: 8,
+  sizeAttenuation: false,
+  depthTest: false,
+});
 
 export class Viewport {
   private scene = new THREE.Scene();
@@ -44,6 +62,10 @@ export class Viewport {
 
   private selectedFaceId: number | null = null;
   private selectedEdgeIds = new Set<number>();
+
+  private sketch: SketchSession | null = null;
+  /** avisa a UI quantos pontos o sketch em andamento tem */
+  onSketchProgress: (pointCount: number) => void = () => {};
 
   constructor(
     container: HTMLElement,
@@ -95,7 +117,9 @@ export class Viewport {
       if (!downAt) return;
       const moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
       downAt = null;
-      if (moved < 5) this.pick(e);
+      if (moved >= 5) return;
+      if (this.sketch) this.addSketchPoint(e);
+      else this.pick(e);
     });
 
     this.renderer.setAnimationLoop(() => {
@@ -138,6 +162,123 @@ export class Viewport {
     this.edges.renderOrder = 1;
     this.edgeGroups = tess.edgeGroups;
     this.bodyGroup.add(this.edges);
+  }
+
+  /**
+   * Entra no modo sketch: cliques passam a criar pontos no plano dado,
+   * e a câmera se posiciona olhando o plano de frente.
+   */
+  startSketch(plane: SketchPlaneData, kind: SketchEntity["kind"]): void {
+    this.cancelSketch();
+    this.clearSelection();
+
+    const origin = new THREE.Vector3(...plane.origin);
+    const x = new THREE.Vector3(...plane.xDir).normalize();
+    const normal = new THREE.Vector3(...plane.normal).normalize();
+    const y = new THREE.Vector3().crossVectors(normal, x);
+
+    const preview = new THREE.Group();
+    this.scene.add(preview);
+
+    this.sketch = {
+      plane,
+      kind,
+      mathPlane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin),
+      basis: { origin, x, y },
+      points: [],
+      preview,
+      saved: {
+        position: this.camera.position.clone(),
+        up: this.camera.up.clone(),
+        target: this.controls.target.clone(),
+      },
+    };
+
+    // olha o plano de frente, a uma distância proporcional ao modelo
+    const dist = (this.edges?.geometry.boundingSphere?.radius ?? 60) * 3;
+    this.camera.up.copy(y);
+    this.camera.position.copy(origin).addScaledVector(normal, Math.max(dist, 120));
+    this.controls.target.copy(origin);
+    this.onSketchProgress(0);
+  }
+
+  cancelSketch(): void {
+    if (!this.sketch) return;
+    this.scene.remove(this.sketch.preview);
+    this.camera.position.copy(this.sketch.saved.position);
+    this.camera.up.copy(this.sketch.saved.up);
+    this.controls.target.copy(this.sketch.saved.target);
+    this.sketch = null;
+  }
+
+  /** Conclui o sketch e devolve a entidade desenhada (ou null se incompleta). */
+  finishSketch(): SketchEntity | null {
+    const s = this.sketch;
+    if (!s) return null;
+
+    let entity: SketchEntity | null = null;
+    if (s.kind === "polygon" && s.points.length >= 3) {
+      entity = { kind: "polygon", points: s.points };
+    } else if (s.kind === "circle" && s.points.length >= 2) {
+      const [c, r] = s.points;
+      const radius = Math.hypot(r[0] - c[0], r[1] - c[1]);
+      if (radius > 0) entity = { kind: "circle", center: c, radius };
+    }
+    this.cancelSketch();
+    return entity;
+  }
+
+  private addSketchPoint(event: PointerEvent): void {
+    const s = this.sketch!;
+    if (s.kind === "circle" && s.points.length >= 2) return;
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const pointer = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(pointer, this.camera);
+    const hit = new THREE.Vector3();
+    if (!this.raycaster.ray.intersectPlane(s.mathPlane, hit)) return;
+
+    // coordenadas locais do plano, com snap de 1 mm
+    const v = hit.clone().sub(s.basis.origin);
+    const u = Math.round(v.dot(s.basis.x));
+    const w = Math.round(v.dot(s.basis.y));
+    s.points.push([u, w]);
+    this.updateSketchPreview();
+    this.onSketchProgress(s.points.length);
+  }
+
+  private sketchPointTo3D(p: [number, number]): THREE.Vector3 {
+    const { origin, x, y } = this.sketch!.basis;
+    return origin.clone().addScaledVector(x, p[0]).addScaledVector(y, p[1]);
+  }
+
+  private updateSketchPreview(): void {
+    const s = this.sketch!;
+    s.preview.clear();
+
+    const pts3d = s.points.map((p) => this.sketchPointTo3D(p));
+    s.preview.add(
+      new THREE.Points(new THREE.BufferGeometry().setFromPoints(pts3d), MAT_SKETCH_POINTS),
+    );
+
+    if (s.kind === "polygon" && pts3d.length >= 2) {
+      const loop = pts3d.length >= 3 ? [...pts3d, pts3d[0]] : pts3d;
+      s.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(loop), MAT_SKETCH));
+    } else if (s.kind === "circle" && s.points.length === 2) {
+      const [c, r] = s.points;
+      const radius = Math.hypot(r[0] - c[0], r[1] - c[1]);
+      const circle: THREE.Vector3[] = [];
+      for (let i = 0; i <= 64; i++) {
+        const a = (i / 64) * Math.PI * 2;
+        circle.push(
+          this.sketchPointTo3D([c[0] + radius * Math.cos(a), c[1] + radius * Math.sin(a)]),
+        );
+      }
+      s.preview.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(circle), MAT_SKETCH));
+    }
   }
 
   /** Projeta um ponto 3D do modelo para pixels da página (usado nos testes E2E). */

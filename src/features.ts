@@ -7,7 +7,38 @@
  * na versão linear mais simples (um único corpo).
  */
 
-export type FeatureType = "box" | "cylinder" | "sphere" | "fillet";
+export type FeatureType = "box" | "cylinder" | "sphere" | "fillet" | "sketch" | "pad";
+
+/** Plano de sketch no espaço: origem + base ortonormal. */
+export interface SketchPlaneData {
+  origin: [number, number, number];
+  xDir: [number, number, number];
+  normal: [number, number, number];
+}
+
+/** Geometria 2D desenhada, em coordenadas locais do plano. */
+export type SketchEntity =
+  | { kind: "polygon"; points: [number, number][] }
+  | { kind: "circle"; center: [number, number]; radius: number };
+
+/**
+ * Referência estável a uma face do B-rep (mesma estratégia do EdgeRef):
+ * fingerprint geométrico + índice topológico como fallback. Permite que
+ * um sketch desenhado numa face a acompanhe quando o modelo muda
+ * (ex.: pocket na face de cima segue a altura do pad).
+ */
+export interface FaceRef {
+  center: [number, number, number];
+  normal: [number, number, number];
+  index: number;
+}
+
+export interface SketchData {
+  plane: SketchPlaneData;
+  entity: SketchEntity;
+  /** presente quando o sketch foi desenhado sobre uma face do corpo */
+  faceRef?: FaceRef;
+}
 
 /** "add" funde com o corpo; "cut" subtrai (furo). Ignorado pelo fillet. */
 export type BooleanMode = "add" | "cut";
@@ -39,6 +70,10 @@ export interface Feature {
   params: Record<string, number>;
   /** Fillet: arestas alvo. Vazio/ausente = todas as arestas do corpo. */
   edgeRefs?: EdgeRef[];
+  /** Sketch: a geometria 2D desenhada e seu plano. */
+  sketch?: SketchData;
+  /** Pad: id da feature de sketch que ele extruda. */
+  sketchId?: number;
   /** Preenchido pelo avaliador quando a feature falha (ex.: fillet impossível). */
   error?: string;
 }
@@ -74,6 +109,8 @@ export const FEATURE_SPECS: Record<FeatureType, ParamSpec[]> = {
     { key: "z", label: "Posição Z", default: 0 },
   ],
   fillet: [{ key: "radius", label: "Raio", min: 0.01, default: 2 }],
+  sketch: [],
+  pad: [{ key: "distance", label: "Distância", min: 0.1, default: 20 }],
 };
 
 const TYPE_LABELS: Record<FeatureType, string> = {
@@ -81,6 +118,8 @@ const TYPE_LABELS: Record<FeatureType, string> = {
   cylinder: "Cilindro",
   sphere: "Esfera",
   fillet: "Fillet",
+  sketch: "Sketch",
+  pad: "Pad",
 };
 
 let nextId = 1;
@@ -88,17 +127,25 @@ let nextId = 1;
 export function createFeature(
   type: FeatureType,
   mode: BooleanMode,
-  edgeRefs?: EdgeRef[],
+  extra?: { edgeRefs?: EdgeRef[]; sketch?: SketchData; sketchId?: number },
 ): Feature {
   const params: Record<string, number> = {};
   for (const spec of FEATURE_SPECS[type]) params[spec.key] = spec.default;
   const id = nextId++;
-  const prefix = type === "fillet" ? "" : mode === "cut" ? "Furo " : "";
-  let name = `${prefix}${TYPE_LABELS[type]} ${id}`;
+
+  let label = TYPE_LABELS[type];
+  let prefix = "";
+  if (type === "pad") {
+    label = mode === "cut" ? "Pocket" : "Pad";
+  } else if (type !== "fillet" && type !== "sketch" && mode === "cut") {
+    prefix = "Furo ";
+  }
+
+  let name = `${prefix}${label} ${id}`;
   if (type === "fillet") {
-    name += edgeRefs?.length
-      ? ` (${edgeRefs.length} aresta${edgeRefs.length > 1 ? "s" : ""})`
+    name += extra?.edgeRefs?.length
+      ? ` (${extra.edgeRefs.length} aresta${extra.edgeRefs.length > 1 ? "s" : ""})`
       : " (todas as arestas)";
   }
-  return { id, type, name, mode, params, edgeRefs };
+  return { id, type, name, mode, params, ...extra };
 }

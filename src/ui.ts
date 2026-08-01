@@ -9,6 +9,8 @@ import {
   type EdgeRef,
   type Feature,
   type FeatureType,
+  type SketchData,
+  type SketchEntity,
 } from "./features";
 
 interface UICallbacks {
@@ -17,6 +19,9 @@ interface UICallbacks {
   onExportSTEP: () => void;
   /** arestas atualmente selecionadas no viewport (para fillet seletivo) */
   getSelectedEdgeRefs: () => EdgeRef[];
+  onStartSketch: (kind: SketchEntity["kind"]) => void;
+  onFinishSketch: (mode: BooleanMode) => void;
+  onCancelSketch: () => void;
 }
 
 export class UI {
@@ -28,16 +33,28 @@ export class UI {
   constructor(root: HTMLElement, private callbacks: UICallbacks) {
     root.innerHTML = `
       <header id="toolbar">
-        <span class="brand">CAD Open Source</span>
-        <button data-add="box">+ Caixa</button>
-        <button data-add="cylinder">+ Cilindro</button>
-        <button data-cut="cylinder">− Furo cilíndrico</button>
-        <button data-add="sphere">+ Esfera</button>
-        <button data-cut="sphere">− Corte esférico</button>
-        <button data-add="fillet">Fillet</button>
-        <span class="spacer"></span>
-        <button id="export-stl" title="Malha para impressão 3D">Exportar STL</button>
-        <button id="export-step" title="B-rep exato, abre em qualquer CAD">Exportar STEP</button>
+        <div id="toolbar-main" class="toolbar-row">
+          <span class="brand">CAD Open Source</span>
+          <button data-sketch="polygon" title="Desenhar um contorno no plano XY ou na face selecionada">✏ Sketch: Polígono</button>
+          <button data-sketch="circle" title="Desenhar um círculo no plano XY ou na face selecionada">✏ Sketch: Círculo</button>
+          <span class="divider"></span>
+          <button data-add="box">+ Caixa</button>
+          <button data-add="cylinder">+ Cilindro</button>
+          <button data-cut="cylinder">− Furo cilíndrico</button>
+          <button data-add="sphere">+ Esfera</button>
+          <button data-add="fillet">Fillet</button>
+          <span class="spacer"></span>
+          <button id="export-stl" title="Malha para impressão 3D">Exportar STL</button>
+          <button id="export-step" title="B-rep exato, abre em qualquer CAD">Exportar STEP</button>
+        </div>
+        <div id="toolbar-sketch" class="toolbar-row hidden">
+          <span class="brand sketch-brand">✏ Modo Sketch</span>
+          <span id="sketch-hint"></span>
+          <span class="spacer"></span>
+          <button id="sketch-pad" disabled>Extrudar (adicionar)</button>
+          <button id="sketch-pocket" disabled>Cortar (pocket)</button>
+          <button id="sketch-cancel">Cancelar</button>
+        </div>
       </header>
       <div id="workspace">
         <aside id="panel">
@@ -66,6 +83,45 @@ export class UI {
     );
     root.querySelector("#export-stl")!.addEventListener("click", callbacks.onExportSTL);
     root.querySelector("#export-step")!.addEventListener("click", callbacks.onExportSTEP);
+
+    root.querySelectorAll<HTMLButtonElement>("[data-sketch]").forEach((btn) =>
+      btn.addEventListener("click", () =>
+        callbacks.onStartSketch(btn.dataset.sketch as SketchEntity["kind"]),
+      ),
+    );
+    root.querySelector("#sketch-pad")!.addEventListener("click", () =>
+      callbacks.onFinishSketch("add"),
+    );
+    root.querySelector("#sketch-pocket")!.addEventListener("click", () =>
+      callbacks.onFinishSketch("cut"),
+    );
+    root.querySelector("#sketch-cancel")!.addEventListener("click", callbacks.onCancelSketch);
+  }
+
+  /** Alterna a barra para o modo sketch (ou de volta). */
+  setSketchMode(active: boolean, hint = ""): void {
+    document.querySelector("#toolbar-main")!.classList.toggle("hidden", active);
+    document.querySelector("#toolbar-sketch")!.classList.toggle("hidden", !active);
+    document.querySelector("#sketch-hint")!.textContent = hint;
+    if (active) this.setSketchReady(false);
+  }
+
+  setSketchHint(hint: string): void {
+    document.querySelector("#sketch-hint")!.textContent = hint;
+  }
+
+  setSketchReady(ready: boolean): void {
+    document.querySelector<HTMLButtonElement>("#sketch-pad")!.disabled = !ready;
+    document.querySelector<HTMLButtonElement>("#sketch-pocket")!.disabled = !ready;
+  }
+
+  /** Adiciona o par Sketch + Pad/Pocket ao histórico. */
+  addSketchAndPad(sketch: SketchData, mode: BooleanMode): void {
+    const sketchFeature = createFeature("sketch", "add", { sketch });
+    const padFeature = createFeature("pad", mode, { sketchId: sketchFeature.id });
+    this.features.push(sketchFeature, padFeature);
+    this.renderTree();
+    this.callbacks.onModelChange(this.features);
   }
 
   get viewportEl(): HTMLElement {
@@ -97,13 +153,14 @@ export class UI {
   private addFeature(type: FeatureType, mode: BooleanMode): void {
     const edgeRefs =
       type === "fillet" ? this.callbacks.getSelectedEdgeRefs() : undefined;
-    this.features.push(createFeature(type, mode, edgeRefs));
+    this.features.push(createFeature(type, mode, { edgeRefs }));
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }
 
   private removeFeature(id: number): void {
-    this.features = this.features.filter((f) => f.id !== id);
+    // remover um sketch remove também os pads que dependem dele
+    this.features = this.features.filter((f) => f.id !== id && f.sketchId !== id);
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }

@@ -11,11 +11,22 @@ import {
   makeBaseBox,
   makeCylinder,
   makeSphere,
+  draw,
+  drawCircle,
+  Plane,
   type Edge,
   type Shape3D,
+  type Sketch,
 } from "replicad";
 
-import type { EdgeRef, Feature } from "./features";
+import type {
+  EdgeRef,
+  FaceRef,
+  Feature,
+  SketchData,
+  SketchPlaneData,
+} from "./features";
+import type { Face } from "replicad";
 
 export async function initKernel(): Promise<void> {
   const OC = await (opencascade as unknown as (opts: object) => Promise<unknown>)({
@@ -41,6 +52,21 @@ function buildPrimitive(f: Feature): Shape3D {
       throw new Error(`Tipo não é primitiva: ${f.type}`);
   }
   return shape.translate(p.x, p.y, p.z);
+}
+
+/** Constrói a face 2D do sketch posicionada no seu plano 3D. */
+function buildSketch(s: SketchData): Sketch {
+  let drawing;
+  if (s.entity.kind === "polygon") {
+    const [first, ...rest] = s.entity.points;
+    let pen = draw(first);
+    for (const p of rest) pen = pen.lineTo(p);
+    drawing = pen.close();
+  } else {
+    drawing = drawCircle(s.entity.radius).translate(s.entity.center);
+  }
+  const plane = new Plane(s.plane.origin, s.plane.xDir, s.plane.normal);
+  return drawing.sketchOnPlane(plane) as Sketch;
 }
 
 export interface EvaluationResult {
@@ -94,6 +120,40 @@ export function evaluate(features: Feature[]): EvaluationResult {
 
   for (const f of features) {
     try {
+      // o sketch em si não altera o corpo — ele é consumido pelo pad
+      if (f.type === "sketch") continue;
+
+      if (f.type === "pad") {
+        const sketchFeature = features.find(
+          (x) => x.id === f.sketchId && x.type === "sketch",
+        );
+        if (!sketchFeature?.sketch) throw new Error("Sketch de referência não encontrado");
+
+        // sketch ancorado numa face: re-resolve o plano no corpo atual,
+        // para o sketch acompanhar a face quando o modelo muda
+        let sketchData = sketchFeature.sketch;
+        if (sketchData.faceRef && body) {
+          const plane = resolveFacePlane(body, sketchData.faceRef);
+          if (plane) sketchData = { ...sketchData, plane };
+          else
+            errors.set(
+              sketchFeature.id,
+              "Face de referência não reencontrada — usando o plano original",
+            );
+        }
+
+        // pad cresce para fora do plano; pocket corta para dentro
+        const distance = f.mode === "cut" ? -f.params.distance : f.params.distance;
+        const solid = buildSketch(sketchData).extrude(distance) as Shape3D;
+        if (!body) {
+          if (f.mode === "cut") throw new Error("Não há corpo para cortar");
+          body = solid;
+        } else {
+          body = f.mode === "add" ? body.fuse(solid) : body.cut(solid);
+        }
+        continue;
+      }
+
       if (f.type === "fillet") {
         if (!body) throw new Error("Não há corpo para aplicar o fillet");
         const refs = f.edgeRefs;
@@ -128,6 +188,83 @@ export function evaluate(features: Feature[]): EvaluationResult {
   }
 
   return { body, errors };
+}
+
+/** Plano padrão de sketch: XY na origem (chão do modelo). */
+export const XY_PLANE: SketchPlaneData = {
+  origin: [0, 0, 0],
+  xDir: [1, 0, 0],
+  normal: [0, 0, 1],
+};
+
+/** Plano de sketch de uma face plana, com base ortonormal determinística. */
+function planeFromFaceObj(face: Face): SketchPlaneData {
+  const c = face.center;
+  const n = face.normalAt();
+  const nLen = Math.hypot(n.x, n.y, n.z) || 1;
+  const nz: [number, number, number] = [n.x / nLen, n.y / nLen, n.z / nLen];
+
+  // base ortonormal: referência pouco alinhada com a normal → xDir = ref × n
+  const ref: [number, number, number] = Math.abs(nz[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+  const xr: [number, number, number] = [
+    ref[1] * nz[2] - ref[2] * nz[1],
+    ref[2] * nz[0] - ref[0] * nz[2],
+    ref[0] * nz[1] - ref[1] * nz[0],
+  ];
+  const xLen = Math.hypot(...xr) || 1;
+
+  return {
+    origin: [c.x, c.y, c.z],
+    xDir: [xr[0] / xLen, xr[1] / xLen, xr[2] / xLen],
+    normal: nz,
+  };
+}
+
+/**
+ * Extrai o plano de sketch (e a referência estável) de uma face plana
+ * selecionada. Retorna null se a face não existir ou não for plana.
+ */
+export function planeFromFace(
+  body: Shape3D,
+  faceId: number,
+): { plane: SketchPlaneData; faceRef: FaceRef } | null {
+  const faces = body.faces;
+  const index = faces.findIndex((f) => f.hashCode === faceId);
+  if (index < 0 || faces[index].geomType !== "PLANE") return null;
+
+  const plane = planeFromFaceObj(faces[index]);
+  return {
+    plane,
+    faceRef: { center: plane.origin, normal: plane.normal, index },
+  };
+}
+
+function sameDirection(n: { x: number; y: number; z: number }, ref: [number, number, number]): boolean {
+  const len = Math.hypot(n.x, n.y, n.z) || 1;
+  return (n.x * ref[0] + n.y * ref[1] + n.z * ref[2]) / len > 0.999;
+}
+
+/**
+ * Reencontra a face referenciada no corpo atual: fingerprint geométrico
+ * (centro + normal) e, se a geometria mudou, o índice topológico — desde
+ * que a normal ainda bata (a face pode ter transladado, não virado).
+ */
+function resolveFacePlane(body: Shape3D, ref: FaceRef): SketchPlaneData | null {
+  const faces = body.faces;
+  let face = faces.find((f) => {
+    if (f.geomType !== "PLANE" || !sameDirection(f.normalAt(), ref.normal)) return false;
+    const c = f.center;
+    return (
+      Math.hypot(c.x - ref.center[0], c.y - ref.center[1], c.z - ref.center[2]) < REF_TOL
+    );
+  });
+  if (!face && ref.index < faces.length) {
+    const candidate = faces[ref.index];
+    if (candidate.geomType === "PLANE" && sameDirection(candidate.normalAt(), ref.normal)) {
+      face = candidate;
+    }
+  }
+  return face ? planeFromFaceObj(face) : null;
 }
 
 export interface TopoGroup {
