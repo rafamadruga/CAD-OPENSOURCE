@@ -9,6 +9,7 @@ import {
   isEdgeFeature,
   type BooleanMode,
   type EdgeRef,
+  type FaceRef,
   type Feature,
   type FeatureType,
   type SketchData,
@@ -26,6 +27,8 @@ interface UICallbacks {
   onExportSTEP: () => void;
   /** arestas atualmente selecionadas no viewport (para fillet/chamfer seletivo) */
   getSelectedEdgeRefs: () => EdgeRef[];
+  /** face plana selecionada (para a abertura da casca), ou null */
+  getSelectedFaceRef: () => FaceRef | null;
   onStartSketch: (kind: "polygon" | "circle") => void;
   onFinishSketch: (action: SketchAction) => void;
   onCancelSketch: () => void;
@@ -68,7 +71,10 @@ export class UI {
           <span class="divider"></span>
           <button data-add="fillet">Fillet</button>
           <button data-add="chamfer">Chamfer</button>
+          <button data-add="shell" title="Oca o sólido removendo a face plana selecionada">Casca</button>
           <span class="divider"></span>
+          <button id="import-step" title="Importa uma peça STEP para o histórico">Importar STEP</button>
+          <input id="import-step-file" type="file" accept=".step,.stp" class="hidden" />
           <button id="undo" title="Desfazer (Ctrl+Z)">↶</button>
           <button id="redo" title="Refazer (Ctrl+Shift+Z)">↷</button>
           <button id="save-doc" title="Salvar documento (.cad.json)">Salvar</button>
@@ -177,6 +183,18 @@ export class UI {
         e.preventDefault();
         this.redo();
       }
+    });
+
+    const stepInput = root.querySelector<HTMLInputElement>("#import-step-file")!;
+    root.querySelector("#import-step")!.addEventListener("click", () => stepInput.click());
+    stepInput.addEventListener("change", async () => {
+      const file = stepInput.files?.[0];
+      stepInput.value = "";
+      if (!file) return;
+      this.snapshot();
+      this.features.push(createFeature("import", "add", { stepData: await file.text() }));
+      this.renderTree();
+      this.callbacks.onModelChange(this.features);
     });
 
     root.querySelector("#save-doc")!.addEventListener("click", () => this.saveDocument());
@@ -327,9 +345,18 @@ export class UI {
   }
 
   private addFeature(type: FeatureType, mode: BooleanMode): void {
+    let faceRef: FaceRef | undefined;
+    if (type === "shell") {
+      const selected = this.callbacks.getSelectedFaceRef();
+      if (!selected) {
+        this.setStatus("Casca: selecione antes a face plana que será a abertura.", true);
+        return;
+      }
+      faceRef = selected;
+    }
     this.snapshot();
     const edgeRefs = isEdgeFeature(type) ? this.callbacks.getSelectedEdgeRefs() : undefined;
-    this.features.push(createFeature(type, mode, { edgeRefs }));
+    this.features.push(createFeature(type, mode, { edgeRefs, faceRef }));
     this.renderTree();
     this.callbacks.onModelChange(this.features);
   }

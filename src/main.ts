@@ -11,6 +11,7 @@ import {
   exportSTL,
   initKernel,
   planeFromFace,
+  prepareImports,
   tessellate,
   XY_PLANE,
   type TessellatedBody,
@@ -26,8 +27,9 @@ let currentTess: TessellatedBody | null = null;
 let currentSelection: Selection = { faceId: null, edgeIds: [] };
 let viewport: Viewport;
 
-function rebuild(features: Feature[], ui: UI): void {
+async function rebuild(features: Feature[], ui: UI): Promise<void> {
   const started = performance.now();
+  await prepareImports(features);
   const { body, errors } = evaluate(features);
   currentBody = body;
   currentTess = body ? tessellate(body) : null;
@@ -62,7 +64,7 @@ async function start(): Promise<void> {
   let editingSketchId: number | null = null;
 
   const ui = new UI(app, {
-    onModelChange: (features) => rebuild(features, ui),
+    onModelChange: (features) => void rebuild(features, ui),
     onExportSTL: () => {
       if (currentBody) downloadBlob(exportSTL(currentBody), "modelo.stl");
     },
@@ -70,6 +72,10 @@ async function start(): Promise<void> {
       if (currentBody) downloadBlob(exportSTEP(currentBody), "modelo.step");
     },
     getSelectedEdgeRefs: selectedEdgeRefs,
+    getSelectedFaceRef: () => {
+      if (currentSelection.faceId === null || !currentBody) return null;
+      return planeFromFace(currentBody, currentSelection.faceId)?.faceRef ?? null;
+    },
     onStartSketch: (kind) => {
       // desenha na face plana selecionada, ou no plano XY
       editingSketchId = null;

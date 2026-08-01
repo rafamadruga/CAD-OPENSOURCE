@@ -15,7 +15,9 @@ export type FeatureType =
   | "chamfer"
   | "sketch"
   | "pad"
-  | "revolve";
+  | "revolve"
+  | "shell"
+  | "import";
 
 /** Plano de sketch no espaço: origem + base ortonormal. */
 export interface SketchPlaneData {
@@ -100,6 +102,10 @@ export interface Feature {
   sketch?: SketchData;
   /** Pad: id da feature de sketch que ele extruda. */
   sketchId?: number;
+  /** Shell: face a remover ao ocar o sólido. */
+  faceRef?: FaceRef;
+  /** Import: conteúdo do arquivo STEP (texto), serializado no documento. */
+  stepData?: string;
   /** Preenchido pelo avaliador quando a feature falha (ex.: fillet impossível). */
   error?: string;
 }
@@ -139,6 +145,12 @@ export const FEATURE_SPECS: Record<FeatureType, ParamSpec[]> = {
   sketch: [],
   pad: [{ key: "distance", label: "Distância", min: 0.1, default: 20 }],
   revolve: [{ key: "angle", label: "Ângulo (°)", min: 1, default: 360 }],
+  shell: [{ key: "thickness", label: "Espessura", min: 0.1, default: 2 }],
+  import: [
+    { key: "x", label: "Posição X", default: 0 },
+    { key: "y", label: "Posição Y", default: 0 },
+    { key: "z", label: "Posição Z", default: 0 },
+  ],
 };
 
 const TYPE_LABELS: Record<FeatureType, string> = {
@@ -150,6 +162,8 @@ const TYPE_LABELS: Record<FeatureType, string> = {
   sketch: "Sketch",
   pad: "Pad",
   revolve: "Revolução",
+  shell: "Casca",
+  import: "Import STEP",
 };
 
 /** Features que operam sobre arestas selecionadas. */
@@ -162,7 +176,13 @@ let nextId = 1;
 export function createFeature(
   type: FeatureType,
   mode: BooleanMode,
-  extra?: { edgeRefs?: EdgeRef[]; sketch?: SketchData; sketchId?: number },
+  extra?: {
+    edgeRefs?: EdgeRef[];
+    sketch?: SketchData;
+    sketchId?: number;
+    faceRef?: FaceRef;
+    stepData?: string;
+  },
 ): Feature {
   const params: Record<string, number> = {};
   for (const spec of FEATURE_SPECS[type]) params[spec.key] = spec.default;

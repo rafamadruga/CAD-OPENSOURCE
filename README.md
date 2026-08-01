@@ -16,6 +16,8 @@ CAD paramétrico de modelagem 3D que roda **no navegador** — gratuito e open-s
 - **Solver de restrições geométricas**: no modo sketch, selecione arestas (✥, até duas) e aplique Horizontal, Vertical, Cota (comprimento exato), Fixar, **Paralela, Perpendicular e Igual**. O solver (Gauss-Newton amortecido com jacobiano numérico, em `src/solver.ts`) move os vértices para satisfazer todas as restrições simultaneamente, mostra os graus de liberdade restantes e **rejeita restrições conflitantes**. As restrições ficam salvas no sketch, são reaplicadas na edição e aparecem **anotadas no desenho** (cotas e símbolos H, V, ∥, ⊥, =, ⚓)
 - **Revolução (lathe)**: gire o perfil do sketch em torno do eixo vertical da vista de sketch, com ângulo paramétrico
 - **Chamfer seletivo**: mesma mecânica do fillet, nas arestas clicadas
+- **Casca (shell)**: oca o sólido com espessura paramétrica, removendo a face plana selecionada — gabinetes, caixas, vasos. A referência de face sobrevive a reconstruções
+- **Import STEP**: traga peças de qualquer CAD para o histórico como uma feature paramétrica (posição editável, participa de booleanas); o conteúdo STEP é serializado dentro do documento nativo
 - **Undo/Redo** (Ctrl+Z / Ctrl+Shift+Z) com snapshots do histórico
 - **Salvar/Abrir documento nativo** (`.cad.json`): o histórico paramétrico completo é serializado — reabra e continue editando
 - **Viewport 3D**: sombreamento + arestas técnicas, órbita/zoom/pan, convenção Z-para-cima
@@ -57,9 +59,11 @@ mudança de parâmetro → **reavaliação do histórico de features** (chamando
 - [x] Edição numérica de círculos de sketch (centro/raio)
 - [x] Solver de restrições geométricas (horizontal, vertical, cota, fixar) com Gauss-Newton
 - [x] Restrições de duas arestas (paralela, perpendicular, igual) e anotações visíveis no desenho
+- [x] Casca (shell) com face de abertura selecionável
+- [x] Import STEP como feature paramétrica
 - [ ] Restrições de tangência e ângulo (envolvem arcos)
 - [ ] Sweep e loft
-- [ ] Import STEP e desenho técnico 2D
+- [ ] Desenho técnico 2D (projeções cotadas)
 - [ ] Import STEP
 - [ ] Desenho técnico 2D (projeções)
 

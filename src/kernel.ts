@@ -13,6 +13,7 @@ import {
   makeSphere,
   draw,
   drawCircle,
+  importSTEP,
   Plane,
   type Edge,
   type Shape3D,
@@ -182,6 +183,24 @@ export function evaluate(features: Feature[]): EvaluationResult {
         continue;
       }
 
+      if (f.type === "import") {
+        const shape = importedShapes.get(f.id);
+        if (!shape) throw new Error("Arquivo STEP inválido ou ainda não carregado");
+        // clona: as transformações do replicad consomem o objeto original,
+        // e o cache precisa sobreviver às próximas reavaliações
+        body = combine(f, shape.clone().translate(f.params.x, f.params.y, f.params.z));
+        continue;
+      }
+
+      if (f.type === "shell") {
+        if (!body) throw new Error("Não há corpo para ocar");
+        if (!f.faceRef) throw new Error("Nenhuma face de referência para a abertura");
+        const face = resolveFace(body, f.faceRef);
+        if (!face) throw new Error("Face de referência não reencontrada");
+        body = body.shell(f.params.thickness, (ff) => ff.inList([face]));
+        continue;
+      }
+
       if (f.type === "fillet" || f.type === "chamfer") {
         if (!body) throw new Error(`Não há corpo para aplicar o ${f.type}`);
         const apply = (radiusConfig: (e: Edge) => number | null): Shape3D =>
@@ -271,22 +290,52 @@ function sameDirection(n: { x: number; y: number; z: number }, ref: [number, num
  * (centro + normal) e, se a geometria mudou, o índice topológico — desde
  * que a normal ainda bata (a face pode ter transladado, não virado).
  */
-function resolveFacePlane(body: Shape3D, ref: FaceRef): SketchPlaneData | null {
+function resolveFace(body: Shape3D, ref: FaceRef): Face | null {
   const faces = body.faces;
-  let face = faces.find((f) => {
+  const face = faces.find((f) => {
     if (f.geomType !== "PLANE" || !sameDirection(f.normalAt(), ref.normal)) return false;
     const c = f.center;
     return (
       Math.hypot(c.x - ref.center[0], c.y - ref.center[1], c.z - ref.center[2]) < REF_TOL
     );
   });
-  if (!face && ref.index < faces.length) {
+  if (face) return face;
+  if (ref.index < faces.length) {
     const candidate = faces[ref.index];
     if (candidate.geomType === "PLANE" && sameDirection(candidate.normalAt(), ref.normal)) {
-      face = candidate;
+      return candidate;
     }
   }
+  return null;
+}
+
+function resolveFacePlane(body: Shape3D, ref: FaceRef): SketchPlaneData | null {
+  const face = resolveFace(body, ref);
   return face ? planeFromFaceObj(face) : null;
+}
+
+// ── import STEP: o parse é assíncrono, o resultado fica em cache ──
+
+const importedShapes = new Map<number, Shape3D | null>();
+
+/**
+ * Garante que toda feature de import tenha seu STEP já convertido em
+ * shape (parse assíncrono, feito uma vez). Chamar antes de evaluate().
+ */
+export async function prepareImports(features: Feature[]): Promise<void> {
+  const live = new Set(features.map((f) => f.id));
+  for (const id of [...importedShapes.keys()]) {
+    if (!live.has(id)) importedShapes.delete(id); // limpa features removidas
+  }
+  for (const f of features) {
+    if (f.type !== "import" || !f.stepData || importedShapes.has(f.id)) continue;
+    try {
+      const shape = await importSTEP(new Blob([f.stepData]));
+      importedShapes.set(f.id, shape as Shape3D);
+    } catch {
+      importedShapes.set(f.id, null);
+    }
+  }
 }
 
 export interface TopoGroup {
