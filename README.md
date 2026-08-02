@@ -7,7 +7,13 @@ CAD paramétrico de modelagem 3D que roda **no navegador** — gratuito e open-s
 
 Construído sobre o kernel geométrico **OpenCASCADE** (o mesmo do FreeCAD) compilado para WebAssembly via [replicad](https://replicad.xyz) — ou seja, **B-rep exato**, não malha de polígonos. O STEP exportado abre em SolidWorks, Fusion 360, FreeCAD e qualquer CAD profissional.
 
-## Rodando
+## 🌐 Usar agora (sem instalar nada)
+
+**➜ https://rafamadruga.github.io/CAD-OPENSOURCE/**
+
+Abre direto no navegador — nada para baixar ou instalar. Todo o processamento acontece na sua máquina (o modelo nunca sai do seu computador). Salve seus projetos como `.cad.json` (menu Salvar) e exporte STL para impressão 3D ou STEP para outros CADs.
+
+## Rodando do código-fonte
 
 ```bash
 npm install
@@ -67,7 +73,7 @@ O fluxo é o de um CAD clássico em 4 camadas (ver [`docs/01-como-funciona-um-ca
 - [ ] Posições dos furos cotadas nas vistas do desenho 2D
 - [ ] Espelhamento e padrões (linear/circular) de features
 - [ ] Montagens (múltiplos corpos com posicionamento)
-- [ ] Deploy hospedado (GitHub Pages)
+- [x] Deploy hospedado (GitHub Pages, automático a cada push na `main`)
 
 ## Testes
 
